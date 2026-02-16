@@ -15,6 +15,7 @@ rusty-claw-providers.workspace = true
 rusty-claw-tools.workspace = true
 rusty-claw-plugins.workspace = true
 rusty-claw-web.workspace = true
+rusty-claw-canvas.workspace = true
 
 tokio.workspace = true
 tokio-tungstenite.workspace = true
@@ -33,6 +34,14 @@ rand.workspace = true
 sha2.workspace = true
 notify.workspace = true
 croner.workspace = true
+serde_yaml.workspace = true
+
+[features]
+tls = ["axum-server"]
+
+[dependencies.axum-server]
+workspace = true
+optional = true
 
 [dev-dependencies]
 tempfile = "3"

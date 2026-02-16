@@ -34,6 +34,16 @@ pub async fn dispatch_method(
         "channels.status" => handle_channels_status(state, request_id).await,
         "config.get" => handle_config_get(state, request_id, params).await,
         "config.set" => handle_config_set(state, request_id, params).await,
+        "skills.list" => handle_skills_list(state, request_id).await,
+        "skills.get" => handle_skills_get(state, request_id, params).await,
+        "node.pair.request" => {
+            crate::nodes::handle_pair_request(&state.pairing, request_id, params)
+        }
+        "node.pair.approve" => {
+            crate::nodes::handle_pair_approve(&state.pairing, request_id, params)
+        }
+        "node.invoke" => crate::nodes::handle_invoke(request_id, params),
+        "node.event" => crate::nodes::handle_event(request_id, params),
         _ => error_response(
             request_id,
             "method_not_found",
@@ -312,6 +322,47 @@ async fn handle_config_set(
         "not_implemented",
         "config.set requires hot-reload mode. Start gateway with --watch-config to enable.",
     )
+}
+
+async fn handle_skills_list(state: &Arc<GatewayState>, request_id: &str) -> GatewayFrame {
+    let skills = state.skills.read().await;
+    let skill_list: Vec<serde_json::Value> = skills
+        .all()
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "description": s.description,
+                "tags": s.tags,
+                "tools": s.tools,
+            })
+        })
+        .collect();
+    ok_response(request_id, json!({ "skills": skill_list }))
+}
+
+async fn handle_skills_get(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+
+    if name.is_empty() {
+        return error_response(request_id, "invalid_params", "name is required");
+    }
+
+    let skills = state.skills.read().await;
+    match skills.get(name) {
+        Some(skill) => {
+            match serde_json::to_value(skill) {
+                Ok(v) => ok_response(request_id, v),
+                Err(e) => error_response(request_id, "serialization_error", &e.to_string()),
+            }
+        }
+        None => error_response(request_id, "not_found", &format!("Skill not found: {name}")),
+    }
 }
 
 fn ok_response(id: &str, payload: serde_json::Value) -> GatewayFrame {

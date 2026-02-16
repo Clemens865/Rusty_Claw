@@ -207,6 +207,20 @@ async fn main() -> anyhow::Result<()> {
             // Create channel registry
             let channels = Arc::new(create_channel_registry(&config));
 
+            // Load skills from workspace
+            let skills_dir = config
+                .skills
+                .as_ref()
+                .and_then(|s| s.dir.as_ref())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| config.workspace_dir().join("skills"));
+            let skills = rusty_claw_gateway::skills::SkillRegistry::load_from_dir(&skills_dir);
+
+            // Create pairing store
+            let pairing = rusty_claw_core::pairing::PairingStore::new(
+                rusty_claw_core::pairing::PairingStore::default_path(),
+            );
+
             // Build gateway state
             let state = Arc::new(rusty_claw_gateway::GatewayState::new(
                 config.clone(),
@@ -215,6 +229,8 @@ async fn main() -> anyhow::Result<()> {
                 tools,
                 providers,
                 hooks,
+                skills,
+                pairing,
             ));
 
             // Start channel routers

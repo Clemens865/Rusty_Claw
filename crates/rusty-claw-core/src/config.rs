@@ -83,7 +83,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxMode {
     Off,
@@ -235,6 +235,14 @@ pub struct ToolsConfig {
     /// Voice transcription configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcription: Option<TranscriptionConfig>,
+
+    /// Exec tool configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec: Option<ExecConfig>,
+
+    /// Browser automation configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserConfig>,
 }
 
 /// Text-to-speech (TTS) configuration.
@@ -347,6 +355,15 @@ pub struct GatewayConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<GatewayAuthConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TlsConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RateLimitConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleConfig>,
 }
 
 fn default_port() -> u16 {
@@ -355,6 +372,7 @@ fn default_port() -> u16 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayAuthConfig {
+    /// Auth mode: "none", "token", or "password". Default: "none".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
 
@@ -362,7 +380,119 @@ pub struct GatewayAuthConfig {
     pub token: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_env: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_env: Option<String>,
+}
+
+impl GatewayAuthConfig {
+    /// Resolve the auth token from direct value or env var.
+    pub fn resolve_token(&self) -> Option<String> {
+        resolve_secret_field(&self.token, &self.token_env)
+    }
+
+    /// Resolve the auth password from direct value or env var.
+    pub fn resolve_password(&self) -> Option<String> {
+        resolve_secret_field(&self.password, &self.password_env)
+    }
+
+    /// Get the effective auth mode.
+    pub fn effective_mode(&self) -> &str {
+        self.mode.as_deref().unwrap_or("none")
+    }
+}
+
+/// TLS configuration for the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Path to the TLS certificate file (PEM).
+    pub cert_path: String,
+    /// Path to the TLS private key file (PEM).
+    pub key_path: String,
+}
+
+/// Rate limiting configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// Max WebSocket connections per IP (default: 10).
+    #[serde(default = "default_max_connections_per_ip")]
+    pub max_connections_per_ip: u32,
+}
+
+fn default_max_connections_per_ip() -> u32 {
+    10
+}
+
+/// Exec tool configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecConfig {
+    /// Execution mode: "blocklist" (default) or "allowlist".
+    #[serde(default = "default_exec_mode")]
+    pub mode: String,
+
+    /// Allowed command prefixes (only used in allowlist mode).
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
+
+    /// Docker image for sandboxed execution (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docker_image: Option<String>,
+
+    /// Maximum output size in bytes (default: 100KB).
+    #[serde(default = "default_max_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+fn default_exec_mode() -> String {
+    "blocklist".into()
+}
+
+fn default_max_output_bytes() -> usize {
+    100_000
+}
+
+/// Tailscale integration configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailscaleConfig {
+    /// Enable Tailscale integration.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Enable Tailscale Funnel for public exposure.
+    #[serde(default)]
+    pub funnel: bool,
+}
+
+/// Browser automation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserConfig {
+    /// Path to Chrome/Chromium binary (auto-detected if omitted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chrome_path: Option<String>,
+
+    /// Run in headless mode (default: true).
+    #[serde(default = "default_true")]
+    pub headless: bool,
+
+    /// Maximum concurrent browser pages (default: 5).
+    #[serde(default = "default_max_pages")]
+    pub max_pages: usize,
+
+    /// Page operation timeout in ms (default: 30000).
+    #[serde(default = "default_browser_timeout")]
+    pub timeout_ms: u64,
+}
+
+fn default_max_pages() -> usize {
+    5
+}
+
+fn default_browser_timeout() -> u64 {
+    30_000
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -394,7 +524,15 @@ pub struct LoggingConfig {}
 pub struct PluginsConfig {}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SkillsConfig {}
+pub struct SkillsConfig {
+    /// Directory to load skill definitions from (default: "skills/" in workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+
+    /// Automatically activate matching skills based on context.
+    #[serde(default)]
+    pub auto_activate: bool,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -408,7 +546,7 @@ pub struct MemoryConfig {
 }
 
 /// Resolve a secret: check the direct value first, then the env-var reference.
-fn resolve_secret_field(direct: &Option<String>, env_var: &Option<String>) -> Option<String> {
+pub fn resolve_secret_field(direct: &Option<String>, env_var: &Option<String>) -> Option<String> {
     if let Some(val) = direct {
         if !val.is_empty() {
             return Some(val.clone());

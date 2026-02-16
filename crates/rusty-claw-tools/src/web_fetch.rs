@@ -1,8 +1,10 @@
-//! web_fetch tool — HTTP GET with content extraction.
+//! web_fetch tool — HTTP GET with content extraction and SSRF protection.
+
+use std::net::IpAddr;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{Tool, ToolContext, ToolOutput};
 
@@ -25,6 +27,82 @@ fn default_timeout() -> u64 {
 
 fn default_max_size() -> usize {
     1_048_576 // 1 MB
+}
+
+/// Validate a URL against SSRF attacks.
+/// Blocks private IPs, localhost, cloud metadata endpoints, and non-HTTP schemes.
+async fn validate_url(url: &str) -> Result<(), String> {
+    // Parse the URL
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
+
+    // Only allow http:// and https://
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("Blocked scheme: {scheme}:// (only http/https allowed)")),
+    }
+
+    // Extract hostname
+    let host = parsed
+        .host_str()
+        .ok_or("URL has no host")?;
+
+    // Block localhost explicitly
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" || host == "0.0.0.0" {
+        return Err(format!("Blocked: requests to {host} are not allowed"));
+    }
+
+    // Block cloud metadata endpoints
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        return Err(format!("Blocked: cloud metadata endpoint {host}"));
+    }
+
+    // Resolve hostname and check for private IPs
+    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let addr_str = format!("{host}:{port}");
+
+    match tokio::net::lookup_host(&addr_str).await {
+        Ok(addrs) => {
+            for addr in addrs {
+                if is_private_ip(addr.ip()) {
+                    return Err(format!(
+                        "Blocked: {host} resolves to private IP {}",
+                        addr.ip()
+                    ));
+                }
+            }
+        }
+        Err(e) => {
+            // DNS resolution failure — allow the request to proceed,
+            // reqwest will handle the error
+            debug!(host, %e, "DNS lookup failed during SSRF check, allowing request");
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if an IP address is private/reserved.
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()              // 127.0.0.0/8
+                || v4.is_private()         // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                || v4.is_link_local()      // 169.254.0.0/16
+                || v4.is_unspecified()     // 0.0.0.0
+                || v4.octets()[0] == 100 && v4.octets()[1] >= 64 && v4.octets()[1] <= 127 // 100.64.0.0/10 (CGNAT)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()               // ::1
+                || v6.is_unspecified()      // ::
+                || {
+                    let segments = v6.segments();
+                    // fc00::/7 (unique local)
+                    (segments[0] & 0xfe00) == 0xfc00
+                    // fe80::/10 (link-local)
+                    || (segments[0] & 0xffc0) == 0xfe80
+                }
+        }
+    }
 }
 
 /// Strip HTML tags for readability. Simple approach — not a full parser.
@@ -150,8 +228,19 @@ impl Tool for WebFetchTool {
 
         debug!(url = %p.url, "web_fetch");
 
+        // SSRF protection: validate URL before making request
+        if let Err(reason) = validate_url(&p.url).await {
+            warn!(url = %p.url, %reason, "SSRF protection blocked request");
+            return Ok(ToolOutput {
+                content: format!("Request blocked: {reason}"),
+                is_error: true,
+                media: None,
+            });
+        }
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(p.timeout_ms))
+            .redirect(reqwest::redirect::Policy::limited(5))
             .build()?;
 
         let resp = match client.get(&p.url).send().await {
@@ -239,5 +328,50 @@ mod tests {
     #[test]
     fn test_strip_html_plain_text() {
         assert_eq!(strip_html_tags("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn test_is_private_ipv4() {
+        use std::net::Ipv4Addr;
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+    }
+
+    #[test]
+    fn test_is_private_ipv6() {
+        use std::net::Ipv6Addr;
+        assert!(is_private_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_private_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_block_localhost() {
+        assert!(validate_url("http://localhost/secret").await.is_err());
+        assert!(validate_url("http://127.0.0.1/secret").await.is_err());
+        assert!(validate_url("http://[::1]/secret").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_block_scheme() {
+        assert!(validate_url("file:///etc/passwd").await.is_err());
+        assert!(validate_url("ftp://example.com").await.is_err());
+        assert!(validate_url("gopher://example.com").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_block_metadata() {
+        assert!(validate_url("http://169.254.169.254/latest/meta-data/").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_allow_public() {
+        // Public URLs should pass validation
+        assert!(validate_url("https://example.com").await.is_ok());
+        assert!(validate_url("http://example.com/page").await.is_ok());
     }
 }

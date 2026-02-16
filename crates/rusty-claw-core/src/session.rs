@@ -39,6 +39,9 @@ pub struct SessionMeta {
     pub spawned_by: Option<String>,
     #[serde(default)]
     pub spawn_depth: u32,
+    /// Currently active skill (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_skill: Option<String>,
 }
 
 /// A single entry in the JSONL transcript file.
@@ -119,6 +122,7 @@ impl Session {
             last_reset_at: None,
             spawned_by: None,
             spawn_depth: 0,
+            active_skill: None,
         };
         Self {
             meta,

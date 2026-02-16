@@ -6,4 +6,5 @@ pub mod pairing;
 pub mod protocol;
 pub mod session;
 pub mod session_store;
+pub mod skills;
 pub mod types;

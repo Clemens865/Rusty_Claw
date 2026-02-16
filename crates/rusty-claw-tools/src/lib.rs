@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use rusty_claw_core::config::Config;
 
+pub mod browser;
+pub mod canvas;
 pub mod edit_file;
 pub mod exec;
 pub mod image_generation;
@@ -30,6 +32,7 @@ pub struct ToolContext {
     pub workspace: PathBuf,
     pub config: Arc<Config>,
     pub restrict_to_workspace: bool,
+    pub sandbox_mode: rusty_claw_core::config::SandboxMode,
 }
 
 /// Output from a tool execution.
@@ -136,4 +139,15 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(Box::new(tts::TtsTool));
     registry.register(Box::new(image_generation::ImageGenerationTool));
     registry.register(Box::new(transcription::TranscriptionTool));
+
+    // Browser tools
+    registry.register(Box::new(browser::BrowserNavigateTool));
+    registry.register(Box::new(browser::BrowserScreenshotTool));
+    registry.register(Box::new(browser::BrowserClickTool));
+    registry.register(Box::new(browser::BrowserExtractTextTool));
+    registry.register(Box::new(browser::BrowserEvaluateJsTool));
+    registry.register(Box::new(browser::BrowserWaitForTool));
+
+    // Canvas tool
+    registry.register(Box::new(canvas::CanvasTool));
 }

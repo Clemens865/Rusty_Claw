@@ -23,6 +23,7 @@ dirs = "6"
 shellexpand = "3"
 regex = "1"
 rand.workspace = true
+serde_yaml.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

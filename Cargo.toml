@@ -82,9 +82,15 @@ pin-project-lite = "0.2"
 # Encoding
 base64 = "0.22"
 
+# YAML
+serde_yaml = "0.9"
+
 # Static asset embedding
 rust-embed = { version = "8", features = ["debug-embed"] }
 mime_guess = "2"
+
+# TLS (optional)
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 
 # Workspace crates (internal)
 rusty-claw-core = { path = "crates/rusty-claw-core" }

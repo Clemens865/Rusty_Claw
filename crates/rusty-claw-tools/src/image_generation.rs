@@ -312,6 +312,7 @@ mod tests {
             workspace: std::env::temp_dir(),
             config: std::sync::Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: false,
+            sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
         };
 
         let saved = std::env::var("OPENAI_API_KEY").ok();

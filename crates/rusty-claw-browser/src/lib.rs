@@ -1,7 +1,9 @@
-//! CDP browser automation (Phase 3).
+//! CDP browser automation.
+//!
+//! Provides browser pool management and page automation tools.
+//! Requires the `browser` feature flag and Chrome/Chromium installed.
 
-// TODO: Phase 3
-// - Chrome DevTools Protocol client
-// - Page navigation, snapshots, actions
-// - File uploads, downloads
-// - Profile management
+pub mod config;
+pub mod pool;
+
+pub use pool::BrowserPool;

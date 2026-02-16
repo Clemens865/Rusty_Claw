@@ -142,6 +142,7 @@ mod tests {
             workspace: workspace.to_path_buf(),
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
+            sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
         };
 
         let result = EditFileTool
@@ -173,6 +174,7 @@ mod tests {
             workspace: workspace.to_path_buf(),
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
+            sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
         };
 
         let result = EditFileTool
@@ -197,6 +199,7 @@ mod tests {
             workspace: workspace.to_path_buf(),
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
+            sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
         };
 
         let result = EditFileTool

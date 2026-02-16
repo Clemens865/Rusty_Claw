@@ -1,0 +1,13 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "18789:18789"
+    volumes:
+      - ./config:/data/config
+      - ./workspace:/data/workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    restart: unless-stopped

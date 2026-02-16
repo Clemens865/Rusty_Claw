@@ -1,6 +1,10 @@
-//! Canvas/A2UI host — agent-driven visual workspace (Phase 3).
+//! Canvas/A2UI host — agent-driven visual workspace.
+//!
+//! The canvas system allows agents to push HTML/JS to connected browser clients
+//! for real-time visual interaction (A2UI pattern).
 
-// TODO: Phase 3
-// - A2UI push/reset/eval/snapshot
-// - WebSocket-based canvas protocol
-// - Client rendering coordination
+pub mod protocol;
+pub mod session;
+
+pub use protocol::{CanvasEvent, CanvasOperation};
+pub use session::CanvasSession;

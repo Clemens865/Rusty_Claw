@@ -4,10 +4,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rusty_claw_core::config::Config;
+use rusty_claw_core::skills::SkillDefinition;
 use rusty_claw_tools::ToolRegistry;
 
 /// Build the system prompt for the agent.
-pub fn build_system_prompt(_config: &Arc<Config>, tools: &ToolRegistry, workspace: &Path) -> String {
+pub fn build_system_prompt(
+    _config: &Arc<Config>,
+    tools: &ToolRegistry,
+    workspace: &Path,
+    active_skills: &[&SkillDefinition],
+) -> String {
     let mut parts = Vec::new();
 
     parts.push("You are a helpful personal AI assistant powered by Rusty Claw.".to_string());
@@ -40,6 +46,16 @@ pub fn build_system_prompt(_config: &Arc<Config>, tools: &ToolRegistry, workspac
     if agents_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&agents_path) {
             parts.push(format!("--- Agent Instructions ---\n{content}"));
+        }
+    }
+
+    // Inject active skill prompts
+    for skill in active_skills {
+        if !skill.system_prompt.is_empty() {
+            parts.push(format!(
+                "--- Active Skill: {} ---\n{}",
+                skill.name, skill.system_prompt
+            ));
         }
     }
 

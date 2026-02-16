@@ -45,8 +45,9 @@ pub async fn run_agent(
     let max_iterations = config.max_tool_iterations();
     let workspace = config.workspace_dir();
 
-    // 1. Build system prompt
-    let system_prompt = build_system_prompt(config, tools, &workspace);
+    // 1. Build system prompt (no active skills in this code path — gateway can set per-session)
+    let active_skills: Vec<&rusty_claw_core::skills::SkillDefinition> = Vec::new();
+    let system_prompt = build_system_prompt(config, tools, &workspace, &active_skills);
 
     // 2. Append user message to transcript
     let user_content = match &message.text {
@@ -322,11 +323,28 @@ pub async fn run_agent(
                 timestamp: Utc::now(),
             });
 
+            let sandbox_mode = config
+                .agents
+                .as_ref()
+                .and_then(|a| a.defaults.as_ref())
+                .and_then(|d| d.sandbox.as_ref())
+                .map(|s| s.mode)
+                .unwrap_or_default();
+
+            let restrict_to_workspace = config
+                .agents
+                .as_ref()
+                .and_then(|a| a.defaults.as_ref())
+                .and_then(|d| d.sandbox.as_ref())
+                .map(|s| s.restrict_to_workspace)
+                .unwrap_or(true);
+
             let tool_context = ToolContext {
                 session_key: session.meta.key.hash_key(),
                 workspace: workspace.clone(),
                 config: config.clone(),
-                restrict_to_workspace: true,
+                restrict_to_workspace,
+                sandbox_mode,
             };
 
             let tool_output = match tools.get(name) {
