@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rusty Claw</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <h1 class="logo">Rusty Claw</h1>
+    </div>
+    <ul class="nav-list">
+      <li><a href="#/" class="nav-link" data-route="/">Dashboard</a></li>
+      <li><a href="#/sessions" class="nav-link" data-route="/sessions">Sessions</a></li>
+      <li><a href="#/chat" class="nav-link" data-route="/chat">Chat</a></li>
+      <li><a href="#/channels" class="nav-link" data-route="/channels">Channels</a></li>
+      <li><a href="#/config" class="nav-link" data-route="/config">Config</a></li>
+    </ul>
+  </nav>
+
+  <main id="app">
+    <div class="loading-spinner">Connecting...</div>
+  </main>
+
+  <footer class="status-bar">
+    <span id="ws-status" class="status-dot disconnected"></span>
+    <span id="ws-label">Disconnected</span>
+    <span class="status-spacer"></span>
+    <span id="version-label"></span>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

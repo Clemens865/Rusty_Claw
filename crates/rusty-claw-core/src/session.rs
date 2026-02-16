@@ -1,5 +1,6 @@
 //! Session model — transcript storage, session keys, and metadata.
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -96,4 +97,64 @@ impl SessionKey {
         self.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
     }
+}
+
+/// Runtime session: metadata + loaded transcript.
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub meta: SessionMeta,
+    pub transcript: Vec<TranscriptEntry>,
+}
+
+impl Session {
+    /// Create a new empty session with the given key.
+    pub fn new(key: SessionKey) -> Self {
+        let meta = SessionMeta {
+            key,
+            label: None,
+            model: None,
+            thinking_level: ThinkingLevel::default(),
+            last_channel: None,
+            last_updated_at: Utc::now(),
+            last_reset_at: None,
+            spawned_by: None,
+            spawn_depth: 0,
+        };
+        Self {
+            meta,
+            transcript: Vec::new(),
+        }
+    }
+
+    /// Append an entry to this session's transcript.
+    pub fn append(&mut self, entry: TranscriptEntry) {
+        self.meta.last_updated_at = Utc::now();
+        self.transcript.push(entry);
+    }
+}
+
+/// Async session persistence trait.
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    /// Load a session by key. Returns None if it doesn't exist.
+    async fn load(&self, key: &SessionKey) -> crate::error::Result<Option<Session>>;
+
+    /// Save a full session (metadata + transcript).
+    async fn save(&self, session: &Session) -> crate::error::Result<()>;
+
+    /// Append a single transcript entry (append-only for durability).
+    async fn append_entry(
+        &self,
+        key: &SessionKey,
+        entry: &TranscriptEntry,
+    ) -> crate::error::Result<()>;
+
+    /// List all session metadata.
+    async fn list(&self) -> crate::error::Result<Vec<SessionMeta>>;
+
+    /// Delete a session entirely (metadata + transcript).
+    async fn delete(&self, key: &SessionKey) -> crate::error::Result<()>;
+
+    /// Reset a session's transcript (keeps metadata, clears transcript).
+    async fn reset(&self, key: &SessionKey) -> crate::error::Result<()>;
 }

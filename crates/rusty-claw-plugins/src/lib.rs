@@ -5,6 +5,14 @@
 
 use async_trait::async_trait;
 
+pub mod api;
+pub mod hooks;
+pub mod logging_plugin;
+pub mod manager;
+
+pub use hooks::{HookContext, HookHandler, HookRegistry, HookResult};
+pub use manager::{PluginManager, PluginRegistrations};
+
 /// Lifecycle hook events that plugins can subscribe to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
@@ -31,17 +39,7 @@ pub enum HookEvent {
 ///
 /// Passed to plugins during registration so they can register their
 /// extensions with the runtime.
-pub struct PluginApi {
-    // TODO: Registration methods for:
-    // - Tools (Box<dyn Tool>)
-    // - Hooks (HookEvent -> handler)
-    // - Channels (Box<dyn Channel>)
-    // - Providers (Box<dyn LlmProvider>)
-    // - HTTP routes
-    // - Gateway methods
-    // - CLI commands
-    // - Chat commands
-}
+pub use api::PluginApi;
 
 /// The core plugin trait.
 #[async_trait]

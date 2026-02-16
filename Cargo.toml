@@ -68,6 +68,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # File watching
 notify = "7"
 
+# Cron expression parsing
+croner = "2"
+
 # Crypto
 rand = "0.9"
 sha2 = "0.10"
@@ -75,6 +78,13 @@ sha2 = "0.10"
 # Futures
 futures = "0.3"
 pin-project-lite = "0.2"
+
+# Encoding
+base64 = "0.22"
+
+# Static asset embedding
+rust-embed = { version = "8", features = ["debug-embed"] }
+mime_guess = "2"
 
 # Workspace crates (internal)
 rusty-claw-core = { path = "crates/rusty-claw-core" }

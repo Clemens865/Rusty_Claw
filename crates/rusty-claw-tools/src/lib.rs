@@ -11,6 +11,19 @@ use serde::{Deserialize, Serialize};
 
 use rusty_claw_core::config::Config;
 
+pub mod edit_file;
+pub mod exec;
+pub mod image_generation;
+pub mod memory;
+pub mod path_guard;
+pub mod read_file;
+pub mod sessions;
+pub mod transcription;
+pub mod tts;
+pub mod web_fetch;
+pub mod web_search;
+pub mod write_file;
+
 /// Context provided to tools during execution.
 pub struct ToolContext {
     pub session_key: String,
@@ -77,6 +90,11 @@ impl ToolRegistry {
         self.tools.iter().map(|t| t.name()).collect()
     }
 
+    /// Access all registered tool objects.
+    pub fn tools(&self) -> &[Box<dyn Tool>] {
+        &self.tools
+    }
+
     /// Generate tool definitions for the LLM API request.
     pub fn to_llm_tools(&self) -> Vec<serde_json::Value> {
         self.tools
@@ -90,4 +108,32 @@ impl ToolRegistry {
             })
             .collect()
     }
+}
+
+/// Register all built-in tools.
+pub fn register_builtin_tools(registry: &mut ToolRegistry) {
+    // Filesystem tools
+    registry.register(Box::new(exec::ExecTool));
+    registry.register(Box::new(read_file::ReadFileTool));
+    registry.register(Box::new(write_file::WriteFileTool));
+    registry.register(Box::new(edit_file::EditFileTool));
+
+    // Web tools
+    registry.register(Box::new(web_fetch::WebFetchTool));
+    registry.register(Box::new(web_search::WebSearchTool));
+
+    // Memory tools
+    registry.register(Box::new(memory::MemoryGetTool));
+    registry.register(Box::new(memory::MemorySetTool));
+    registry.register(Box::new(memory::MemoryListTool));
+    registry.register(Box::new(memory::MemorySearchTool));
+
+    // Session tools
+    registry.register(Box::new(sessions::SessionsListTool));
+    registry.register(Box::new(sessions::SessionsSendTool));
+
+    // Multimedia tools
+    registry.register(Box::new(tts::TtsTool));
+    registry.register(Box::new(image_generation::ImageGenerationTool));
+    registry.register(Box::new(transcription::TranscriptionTool));
 }

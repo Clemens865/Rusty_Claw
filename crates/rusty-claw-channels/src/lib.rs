@@ -15,6 +15,12 @@ pub mod telegram;
 #[cfg(feature = "discord")]
 pub mod discord;
 
+#[cfg(feature = "slack")]
+pub mod slack;
+
+#[cfg(feature = "webchat")]
+pub mod webchat;
+
 /// Channel metadata for UI display and discovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMeta {

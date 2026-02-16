@@ -30,3 +30,5 @@ async-trait.workspace = true
 reqwest.workspace = true
 futures.workspace = true
 pin-project-lite.workspace = true
+chrono.workspace = true
+bytes = "1"

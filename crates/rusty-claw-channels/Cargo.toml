@@ -8,10 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["telegram", "discord", "webchat"]
+default = ["telegram", "discord", "webchat", "slack"]
 telegram = ["teloxide"]
-discord = ["serenity"]
-slack = []
+discord = []
+slack = ["hmac", "hex"]
 whatsapp = []
 signal = []
 imessage = []
@@ -38,4 +38,6 @@ futures.workspace = true
 
 # Channel-specific deps (optional)
 teloxide = { version = "0.13", optional = true, features = ["macros"] }
-serenity = { version = "0.12", optional = true, features = ["client", "gateway", "model"] }
+hmac = { version = "0.12", optional = true }
+hex = { version = "0.4", optional = true }
+sha2.workspace = true

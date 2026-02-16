@@ -18,5 +18,11 @@ anyhow.workspace = true
 tracing.workspace = true
 notify.workspace = true
 tokio = { workspace = true, features = ["fs", "sync"] }
+async-trait.workspace = true
 dirs = "6"
 shellexpand = "3"
+regex = "1"
+rand.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -115,3 +115,25 @@ pub struct ImageSource {
     pub media_type: String,
     pub data: String,
 }
+
+impl InboundMessage {
+    /// Create an `InboundMessage` from plain text (for CLI one-shot mode).
+    pub fn from_cli_text(text: &str) -> Self {
+        Self {
+            channel: "cli".into(),
+            account_id: "local".into(),
+            chat_type: ChatType::Dm,
+            sender: Sender {
+                id: "local-user".into(),
+                display_name: Some("User".into()),
+                username: None,
+            },
+            text: Some(text.to_string()),
+            media: Vec::new(),
+            reply_to: None,
+            thread_id: None,
+            timestamp: Utc::now(),
+            raw: None,
+        }
+    }
+}

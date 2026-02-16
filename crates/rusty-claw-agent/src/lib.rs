@@ -6,6 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod prompt;
+pub mod runtime;
+pub mod transcript;
+
+pub use runtime::run_agent;
+
 /// Events emitted by the agent runtime during a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -91,13 +97,3 @@ pub enum AgentErrorKind {
     Timeout,
     Aborted,
 }
-
-// TODO: Implement the core agent loop:
-// pub async fn run_agent(
-//     session: &mut Session,
-//     message: InboundMessage,
-//     config: &AgentConfig,
-//     tools: &ToolRegistry,
-//     provider: &dyn LlmProvider,
-//     event_tx: mpsc::UnboundedSender<AgentEvent>,
-// ) -> Result<AgentRunResult>

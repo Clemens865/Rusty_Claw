@@ -4,9 +4,16 @@
 //! session state, dispatches agent runs, broadcasts events to all connected
 //! clients, and coordinates tool execution.
 
-// TODO: Implement gateway modules:
-// pub mod server;       // WebSocket server (axum + tungstenite)
-// pub mod connection;   // Connection lifecycle, handshake, auth
-// pub mod methods;      // Gateway method handlers (sessions, agent, config, ...)
-// pub mod events;       // Event broadcasting
-// pub mod state;        // Gateway shared state (sessions, presence, health)
+pub mod channel_router;
+pub mod connection;
+pub mod cron;
+pub mod events;
+pub mod hot_reload;
+pub mod methods;
+pub mod server;
+pub mod state;
+
+pub use cron::CronScheduler;
+pub use hot_reload::ConfigWatcher;
+pub use server::start_gateway;
+pub use state::GatewayState;
