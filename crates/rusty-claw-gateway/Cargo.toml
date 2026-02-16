@@ -15,9 +15,11 @@ rusty-claw-providers.workspace = true
 rusty-claw-tools.workspace = true
 rusty-claw-plugins.workspace = true
 rusty-claw-web.workspace = true
+rusty-claw-browser.workspace = true
 rusty-claw-canvas.workspace = true
 
 tokio.workspace = true
+tokio-util.workspace = true
 tokio-tungstenite.workspace = true
 tokio-stream.workspace = true
 axum.workspace = true
@@ -45,3 +47,5 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }

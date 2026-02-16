@@ -1,13 +1,21 @@
 //! Browser automation tools for the agent.
 //!
 //! Provides navigate, screenshot, click, extract_text, evaluate_js, and wait_for.
-//! These are stub implementations that return descriptive messages when the
-//! browser feature is not enabled or Chrome is not available.
+//! These tools delegate to the BrowserPool in ToolContext when available.
 
 use async_trait::async_trait;
+use base64::Engine;
 use serde_json::json;
 
-use crate::{Tool, ToolContext, ToolOutput};
+use crate::{Tool, ToolContext, ToolMedia, ToolOutput};
+
+fn no_browser_error() -> ToolOutput {
+    ToolOutput {
+        content: "Browser not configured. Set tools.browser in config to enable.".into(),
+        is_error: true,
+        media: None,
+    }
+}
 
 /// Navigate to a URL and return page info.
 pub struct BrowserNavigateTool;
@@ -38,7 +46,7 @@ impl Tool for BrowserNavigateTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let url = params
             .get("url")
@@ -53,12 +61,23 @@ impl Tool for BrowserNavigateTool {
             });
         }
 
-        // Stub: in a real implementation, this would use BrowserPool
-        Ok(ToolOutput {
-            content: format!("Navigated to: {url}\nTitle: (browser not available — install Chrome and enable browser feature)"),
-            is_error: false,
-            media: None,
-        })
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.navigate(&context.session_key, url).await {
+            Ok(info) => Ok(ToolOutput {
+                content: format!("Navigated to: {}\nTitle: {}", info.url, info.title),
+                is_error: false,
+                media: None,
+            }),
+            Err(e) => Ok(ToolOutput {
+                content: format!("Navigation failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }
 
@@ -90,13 +109,31 @@ impl Tool for BrowserScreenshotTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        Ok(ToolOutput {
-            content: "Screenshot not available — browser feature not enabled".into(),
-            is_error: true,
-            media: None,
-        })
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.screenshot(&context.session_key).await {
+            Ok(bytes) => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(ToolOutput {
+                    content: format!("Screenshot captured ({} bytes)", bytes.len()),
+                    is_error: false,
+                    media: Some(vec![ToolMedia {
+                        mime_type: "image/png".into(),
+                        data: b64,
+                    }]),
+                })
+            }
+            Err(e) => Ok(ToolOutput {
+                content: format!("Screenshot failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }
 
@@ -129,7 +166,7 @@ impl Tool for BrowserClickTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let selector = params
             .get("selector")
@@ -144,11 +181,23 @@ impl Tool for BrowserClickTool {
             });
         }
 
-        Ok(ToolOutput {
-            content: format!("Click not available — browser feature not enabled (selector: {selector})"),
-            is_error: true,
-            media: None,
-        })
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.click(&context.session_key, selector).await {
+            Ok(()) => Ok(ToolOutput {
+                content: format!("Clicked element: {selector}"),
+                is_error: false,
+                media: None,
+            }),
+            Err(e) => Ok(ToolOutput {
+                content: format!("Click failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }
 
@@ -179,14 +228,30 @@ impl Tool for BrowserExtractTextTool {
 
     async fn execute(
         &self,
-        _params: serde_json::Value,
-        _context: &ToolContext,
+        params: serde_json::Value,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
-        Ok(ToolOutput {
-            content: "Text extraction not available — browser feature not enabled".into(),
-            is_error: true,
-            media: None,
-        })
+        let selector = params
+            .get("selector")
+            .and_then(|v| v.as_str());
+
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.extract_text(&context.session_key, selector).await {
+            Ok(text) => Ok(ToolOutput {
+                content: text,
+                is_error: false,
+                media: None,
+            }),
+            Err(e) => Ok(ToolOutput {
+                content: format!("Text extraction failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }
 
@@ -219,7 +284,7 @@ impl Tool for BrowserEvaluateJsTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let expression = params
             .get("expression")
@@ -234,11 +299,26 @@ impl Tool for BrowserEvaluateJsTool {
             });
         }
 
-        Ok(ToolOutput {
-            content: "JS evaluation not available — browser feature not enabled".into(),
-            is_error: true,
-            media: None,
-        })
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.evaluate_js(&context.session_key, expression).await {
+            Ok(value) => {
+                let formatted = serde_json::to_string_pretty(&value).unwrap_or_default();
+                Ok(ToolOutput {
+                    content: formatted,
+                    is_error: false,
+                    media: None,
+                })
+            }
+            Err(e) => Ok(ToolOutput {
+                content: format!("JS evaluation failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }
 
@@ -275,7 +355,7 @@ impl Tool for BrowserWaitForTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<ToolOutput> {
         let selector = params
             .get("selector")
@@ -290,10 +370,31 @@ impl Tool for BrowserWaitForTool {
             });
         }
 
-        Ok(ToolOutput {
-            content: format!("Wait not available — browser feature not enabled (selector: {selector})"),
-            is_error: true,
-            media: None,
-        })
+        let timeout_ms = params
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64());
+
+        let pool = match &context.browser_pool {
+            Some(p) => p,
+            None => return Ok(no_browser_error()),
+        };
+
+        match pool.wait_for(&context.session_key, selector, timeout_ms).await {
+            Ok(true) => Ok(ToolOutput {
+                content: format!("Element found: {selector}"),
+                is_error: false,
+                media: None,
+            }),
+            Ok(false) => Ok(ToolOutput {
+                content: format!("Timeout waiting for element: {selector}"),
+                is_error: true,
+                media: None,
+            }),
+            Err(e) => Ok(ToolOutput {
+                content: format!("Wait failed: {e}"),
+                is_error: true,
+                media: None,
+            }),
+        }
     }
 }

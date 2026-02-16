@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use tracing::{debug, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
+use rusty_claw_core::config::CronJob;
 use rusty_claw_core::protocol::{ErrorShape, GatewayFrame};
 use rusty_claw_core::session::{Session, SessionKey};
 use rusty_claw_core::types::{ChatType, InboundMessage};
@@ -29,13 +31,21 @@ pub async fn dispatch_method(
         "sessions.reset" => handle_sessions_reset(state, request_id, params).await,
         "sessions.patch" => handle_sessions_patch(state, request_id, params).await,
         "agent" => handle_agent(state, request_id, params).await,
+        "agent.abort" => handle_agent_abort(state, request_id, params).await,
+        "agent.status" => handle_agent_status(state, request_id, params).await,
         "wake" => ok_response(request_id, json!({"status": "ok"})),
         "models.list" => handle_models_list(state, request_id).await,
         "channels.status" => handle_channels_status(state, request_id).await,
+        "channels.login" => handle_channels_login(state, request_id, params).await,
+        "channels.logout" => handle_channels_logout(state, request_id, params).await,
         "config.get" => handle_config_get(state, request_id, params).await,
         "config.set" => handle_config_set(state, request_id, params).await,
+        "cron.list" => handle_cron_list(state, request_id).await,
+        "cron.add" => handle_cron_add(state, request_id, params).await,
+        "cron.remove" => handle_cron_remove(state, request_id, params).await,
         "skills.list" => handle_skills_list(state, request_id).await,
         "skills.get" => handle_skills_get(state, request_id, params).await,
+        "talk.config" => handle_talk_config(state, request_id, params).await,
         "node.pair.request" => {
             crate::nodes::handle_pair_request(&state.pairing, request_id, params)
         }
@@ -51,6 +61,10 @@ pub async fn dispatch_method(
         ),
     }
 }
+
+// ============================================================
+// Session methods
+// ============================================================
 
 async fn handle_sessions_list(state: &Arc<GatewayState>, request_id: &str) -> GatewayFrame {
     match state.sessions.list().await {
@@ -135,6 +149,49 @@ async fn handle_sessions_reset(
     }
 }
 
+async fn handle_sessions_patch(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let key: SessionKey =
+        match serde_json::from_value(params.get("key").cloned().unwrap_or_default()) {
+            Ok(k) => k,
+            Err(e) => return error_response(request_id, "invalid_params", &e.to_string()),
+        };
+
+    match state.sessions.load(&key).await {
+        Ok(Some(mut session)) => {
+            if let Some(label) = params.get("label").and_then(|v| v.as_str()) {
+                session.meta.label = Some(label.to_string());
+            }
+            if let Some(model) = params.get("model").and_then(|v| v.as_str()) {
+                session.meta.model = Some(model.to_string());
+            }
+            if let Some(thinking) = params.get("thinking_level").and_then(|v| v.as_str()) {
+                if let Ok(level) = serde_json::from_value(json!(thinking)) {
+                    session.meta.thinking_level = level;
+                }
+            }
+
+            match state.sessions.save(&session).await {
+                Ok(()) => {
+                    state.bump_state_version();
+                    ok_response(request_id, json!({"patched": true}))
+                }
+                Err(e) => error_response(request_id, "session_error", &e.to_string()),
+            }
+        }
+        Ok(None) => error_response(request_id, "not_found", "Session not found"),
+        Err(e) => error_response(request_id, "session_error", &e.to_string()),
+    }
+}
+
+// ============================================================
+// Agent methods
+// ============================================================
+
 async fn handle_agent(
     state: &Arc<GatewayState>,
     request_id: &str,
@@ -149,7 +206,6 @@ async fn handle_agent(
 
     let message = InboundMessage::from_cli_text(&text);
 
-    // Resolve session key
     let key = SessionKey {
         channel: "gateway".into(),
         account_id: "ws-client".into(),
@@ -158,6 +214,8 @@ async fn handle_agent(
         scope: rusty_claw_core::session::SessionScope::PerSender,
     };
 
+    let session_hash = key.hash_key();
+
     let mut session = match state.sessions.load(&key).await {
         Ok(Some(s)) => s,
         Ok(None) => Session::new(key.clone()),
@@ -165,6 +223,13 @@ async fn handle_agent(
     };
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+
+    // Create cancellation token for this agent run
+    let cancel_token = CancellationToken::new();
+    {
+        let mut active = state.active_agents.write().await;
+        active.insert(session_hash.clone(), cancel_token.clone());
+    }
 
     // Spawn event forwarder
     let state_clone = state.clone();
@@ -181,11 +246,14 @@ async fn handle_agent(
         None => return error_response(request_id, "no_provider", "No default provider configured"),
     };
 
+    // Read config snapshot
+    let config = Arc::new(state.read_config().await);
+
     info!("Starting agent run via gateway");
     let result = rusty_claw_agent::run_agent(
         &mut session,
         message,
-        &state.config,
+        &config,
         &state.tools,
         provider,
         credentials,
@@ -193,6 +261,12 @@ async fn handle_agent(
         &state.hooks,
     )
     .await;
+
+    // Remove from active agents
+    {
+        let mut active = state.active_agents.write().await;
+        active.remove(&session_hash);
+    }
 
     // Save session
     if let Err(e) = state.sessions.save(&session).await {
@@ -204,6 +278,64 @@ async fn handle_agent(
         Err(e) => error_response(request_id, "agent_error", &e.to_string()),
     }
 }
+
+async fn handle_agent_abort(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let session_key = params
+        .get("session_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if session_key.is_empty() {
+        let active = state.active_agents.read().await;
+        let count = active.len();
+        for token in active.values() {
+            token.cancel();
+        }
+        return ok_response(request_id, json!({"aborted": count}));
+    }
+
+    let active = state.active_agents.read().await;
+    if let Some(token) = active.get(session_key) {
+        token.cancel();
+        ok_response(request_id, json!({"aborted": true, "session_key": session_key}))
+    } else {
+        error_response(
+            request_id,
+            "not_found",
+            &format!("No active agent for session: {session_key}"),
+        )
+    }
+}
+
+async fn handle_agent_status(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let session_key = params
+        .get("session_key")
+        .and_then(|v| v.as_str());
+
+    let active = state.active_agents.read().await;
+
+    if let Some(key) = session_key {
+        let running = active.contains_key(key);
+        ok_response(request_id, json!({"session_key": key, "running": running}))
+    } else {
+        let running: Vec<&String> = active.keys().collect();
+        ok_response(request_id, json!({"active_agents": running}))
+    }
+}
+
+// ============================================================
+// Model + Channel methods
+// ============================================================
 
 async fn handle_models_list(state: &Arc<GatewayState>, request_id: &str) -> GatewayFrame {
     let mut all_models = Vec::new();
@@ -236,45 +368,71 @@ async fn handle_channels_status(state: &Arc<GatewayState>, request_id: &str) -> 
     ok_response(request_id, json!({ "channels": statuses }))
 }
 
-async fn handle_sessions_patch(
+async fn handle_channels_login(
     state: &Arc<GatewayState>,
     request_id: &str,
     params: Option<serde_json::Value>,
 ) -> GatewayFrame {
     let params = params.unwrap_or_default();
-    let key: SessionKey =
-        match serde_json::from_value(params.get("key").cloned().unwrap_or_default()) {
-            Ok(k) => k,
-            Err(e) => return error_response(request_id, "invalid_params", &e.to_string()),
-        };
+    let channel_id = params
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-    match state.sessions.load(&key).await {
-        Ok(Some(mut session)) => {
-            // Apply patches
-            if let Some(label) = params.get("label").and_then(|v| v.as_str()) {
-                session.meta.label = Some(label.to_string());
-            }
-            if let Some(model) = params.get("model").and_then(|v| v.as_str()) {
-                session.meta.model = Some(model.to_string());
-            }
-            if let Some(thinking) = params.get("thinking_level").and_then(|v| v.as_str()) {
-                if let Ok(level) = serde_json::from_value(json!(thinking)) {
-                    session.meta.thinking_level = level;
-                }
-            }
+    if channel_id.is_empty() {
+        return error_response(request_id, "invalid_params", "channel is required");
+    }
 
-            match state.sessions.save(&session).await {
-                Ok(()) => {
-                    state.bump_state_version();
-                    ok_response(request_id, json!({"patched": true}))
+    match state.channels.get(channel_id) {
+        Some(ch) => {
+            let config_value = json!({});
+            match ch.start(&config_value).await {
+                Ok((_rx, _handle)) => {
+                    info!(channel = channel_id, "Channel logged in via WS method");
+                    ok_response(request_id, json!({"channel": channel_id, "logged_in": true}))
                 }
-                Err(e) => error_response(request_id, "session_error", &e.to_string()),
+                Err(e) => error_response(request_id, "channel_error", &e.to_string()),
             }
         }
-        Ok(None) => error_response(request_id, "not_found", "Session not found"),
-        Err(e) => error_response(request_id, "session_error", &e.to_string()),
+        None => error_response(
+            request_id,
+            "not_found",
+            &format!("Channel not found: {channel_id}"),
+        ),
     }
 }
+
+async fn handle_channels_logout(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let channel_id = params
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if channel_id.is_empty() {
+        return error_response(request_id, "invalid_params", "channel is required");
+    }
+
+    match state.channels.get(channel_id) {
+        Some(_ch) => {
+            info!(channel = channel_id, "Channel logout requested via WS method");
+            ok_response(request_id, json!({"channel": channel_id, "logged_out": true}))
+        }
+        None => error_response(
+            request_id,
+            "not_found",
+            &format!("Channel not found: {channel_id}"),
+        ),
+    }
+}
+
+// ============================================================
+// Config methods
+// ============================================================
 
 async fn handle_config_get(
     state: &Arc<GatewayState>,
@@ -287,14 +445,15 @@ async fn handle_config_get(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    let config = state.read_config().await;
+
     if path.is_empty() {
-        // Return entire config
-        match serde_json::to_value(state.config.as_ref()) {
+        match serde_json::to_value(&config) {
             Ok(v) => ok_response(request_id, v),
             Err(e) => error_response(request_id, "config_error", &e.to_string()),
         }
     } else {
-        match state.config.get_path(path) {
+        match config.get_path(path) {
             Some(value) => ok_response(request_id, json!({ "path": path, "value": value })),
             None => error_response(
                 request_id,
@@ -306,23 +465,125 @@ async fn handle_config_get(
 }
 
 async fn handle_config_set(
-    _state: &Arc<GatewayState>,
+    state: &Arc<GatewayState>,
     request_id: &str,
     params: Option<serde_json::Value>,
 ) -> GatewayFrame {
     let params = params.unwrap_or_default();
-    let _path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let _value = params.get("value");
+    let path = match params.get("path").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => return error_response(request_id, "invalid_params", "path is required"),
+    };
+    let value = match params.get("value") {
+        Some(v) => v.clone(),
+        None => return error_response(request_id, "invalid_params", "value is required"),
+    };
 
-    // Config is currently Arc<Config> (immutable). Full config.set requires
-    // the hot-reload system with Arc<RwLock<Config>>. For now, return a
-    // placeholder that acknowledges the intent.
-    error_response(
-        request_id,
-        "not_implemented",
-        "config.set requires hot-reload mode. Start gateway with --watch-config to enable.",
+    {
+        let mut config = state.config.write().await;
+        if let Err(e) = config.set_path(&path, value.clone()) {
+            return error_response(request_id, "config_error", &e.to_string());
+        }
+
+        if let Some(ref config_path) = state.config_path {
+            if let Err(e) = config.save(config_path) {
+                warn!(%e, "Failed to persist config to disk");
+            }
+        }
+    }
+
+    broadcast_event(
+        state,
+        "config.changed",
+        Some(json!({"path": path, "value": value})),
     )
+    .await;
+
+    state.bump_state_version();
+
+    ok_response(request_id, json!({"path": path, "updated": true}))
 }
+
+// ============================================================
+// Cron methods
+// ============================================================
+
+async fn handle_cron_list(state: &Arc<GatewayState>, request_id: &str) -> GatewayFrame {
+    match &state.cron {
+        Some(scheduler) => {
+            let jobs = scheduler.list_jobs().await;
+            let job_list: Vec<serde_json::Value> = jobs
+                .iter()
+                .map(|j| {
+                    json!({
+                        "id": j.id,
+                        "schedule": j.schedule,
+                        "task": j.task,
+                        "enabled": j.enabled,
+                    })
+                })
+                .collect();
+            ok_response(request_id, json!({ "jobs": job_list }))
+        }
+        None => ok_response(request_id, json!({ "jobs": [] })),
+    }
+}
+
+async fn handle_cron_add(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let schedule = params.get("schedule").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let task = params.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    if id.is_empty() || schedule.is_empty() || task.is_empty() {
+        return error_response(request_id, "invalid_params", "id, schedule, and task are required");
+    }
+
+    let job = CronJob {
+        id: id.clone(),
+        schedule,
+        task,
+        session_key: params.get("session_key").and_then(|v| v.as_str()).map(String::from),
+        enabled: params.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+    };
+
+    match &state.cron {
+        Some(scheduler) => match scheduler.add_job(job).await {
+            Ok(()) => ok_response(request_id, json!({"added": true, "id": id})),
+            Err(e) => error_response(request_id, "cron_error", &e),
+        },
+        None => error_response(request_id, "not_available", "Cron scheduler not running"),
+    }
+}
+
+async fn handle_cron_remove(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if id.is_empty() {
+        return error_response(request_id, "invalid_params", "id is required");
+    }
+
+    match &state.cron {
+        Some(scheduler) => {
+            let removed = scheduler.remove_job(id).await;
+            ok_response(request_id, json!({"removed": removed, "id": id}))
+        }
+        None => error_response(request_id, "not_available", "Cron scheduler not running"),
+    }
+}
+
+// ============================================================
+// Skills methods
+// ============================================================
 
 async fn handle_skills_list(state: &Arc<GatewayState>, request_id: &str) -> GatewayFrame {
     let skills = state.skills.read().await;
@@ -355,15 +616,49 @@ async fn handle_skills_get(
 
     let skills = state.skills.read().await;
     match skills.get(name) {
-        Some(skill) => {
-            match serde_json::to_value(skill) {
-                Ok(v) => ok_response(request_id, v),
-                Err(e) => error_response(request_id, "serialization_error", &e.to_string()),
-            }
-        }
+        Some(skill) => match serde_json::to_value(skill) {
+            Ok(v) => ok_response(request_id, v),
+            Err(e) => error_response(request_id, "serialization_error", &e.to_string()),
+        },
         None => error_response(request_id, "not_found", &format!("Skill not found: {name}")),
     }
 }
+
+// ============================================================
+// Talk config method
+// ============================================================
+
+async fn handle_talk_config(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let action = params.get("action").and_then(|v| v.as_str()).unwrap_or("get");
+
+    let config = state.read_config().await;
+
+    match action {
+        "get" => {
+            let tts = config
+                .tools
+                .as_ref()
+                .and_then(|t| t.tts.as_ref())
+                .map(|t| json!({"provider": t.provider, "voice": t.default_voice, "model": t.default_model}));
+            let transcription = config
+                .tools
+                .as_ref()
+                .and_then(|t| t.transcription.as_ref())
+                .map(|t| json!({"provider": t.provider, "model": t.model}));
+            ok_response(request_id, json!({"tts": tts, "transcription": transcription}))
+        }
+        _ => error_response(request_id, "invalid_params", "action must be 'get'"),
+    }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
 
 fn ok_response(id: &str, payload: serde_json::Value) -> GatewayFrame {
     GatewayFrame::Response {

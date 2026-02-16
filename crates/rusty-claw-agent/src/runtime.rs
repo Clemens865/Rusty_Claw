@@ -345,6 +345,7 @@ pub async fn run_agent(
                 config: config.clone(),
                 restrict_to_workspace,
                 sandbox_mode,
+                browser_pool: None, // Set by gateway when browser is available
             };
 
             let tool_output = match tools.get(name) {

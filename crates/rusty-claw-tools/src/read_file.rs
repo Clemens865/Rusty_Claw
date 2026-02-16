@@ -136,6 +136,7 @@ mod tests {
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
             sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
+            browser_pool: None,
         };
 
         let result = ReadFileTool
@@ -159,6 +160,7 @@ mod tests {
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
             sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
+            browser_pool: None,
         };
 
         let result = ReadFileTool
@@ -180,6 +182,7 @@ mod tests {
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: true,
             sandbox_mode: rusty_claw_core::config::SandboxMode::default(),
+            browser_pool: None,
         };
 
         let result = ReadFileTool

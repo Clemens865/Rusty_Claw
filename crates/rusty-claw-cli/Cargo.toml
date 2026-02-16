@@ -19,6 +19,7 @@ rusty-claw-channels.workspace = true
 rusty-claw-providers.workspace = true
 rusty-claw-tools.workspace = true
 rusty-claw-plugins.workspace = true
+rusty-claw-browser.workspace = true
 
 tokio.workspace = true
 clap.workspace = true
@@ -27,3 +28,4 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+dialoguer.workspace = true

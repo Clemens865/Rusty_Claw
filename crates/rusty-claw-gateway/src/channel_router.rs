@@ -89,10 +89,13 @@ async fn handle_inbound_message(
     // Run agent
     info!(channel = channel_id, sender = %message.sender.id, "Running agent for channel message");
 
+    // Read config snapshot
+    let config = Arc::new(state.read_config().await);
+
     let result = rusty_claw_agent::run_agent(
         &mut session,
         message.clone(),
-        &state.config,
+        &config,
         &state.tools,
         provider,
         credentials,

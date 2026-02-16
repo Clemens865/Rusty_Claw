@@ -109,10 +109,13 @@ impl CronScheduler {
 
         let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
 
+        // Read config snapshot
+        let config = std::sync::Arc::new(state.read_config().await);
+
         match rusty_claw_agent::run_agent(
             &mut session,
             message,
-            &state.config,
+            &config,
             &state.tools,
             provider,
             credentials,

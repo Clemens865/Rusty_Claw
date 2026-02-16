@@ -63,3 +63,24 @@ jobs:
       - run: cargo build --release
       - name: Binary size
         run: ls -lh target/release/rusty-claw || true
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'integration')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Gateway integration tests
+        run: cargo test -p rusty-claw-gateway --test integration
+      - name: Provider integration tests (Anthropic)
+        if: env.ANTHROPIC_API_KEY != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: cargo test -p rusty-claw-providers --test integration -- test_anthropic
+      - name: Provider integration tests (OpenAI)
+        if: env.OPENAI_API_KEY != ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: cargo test -p rusty-claw-providers --test integration -- test_openai

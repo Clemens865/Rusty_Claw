@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use rusty_claw_browser::BrowserPool;
 use rusty_claw_core::config::Config;
 
 pub mod browser;
@@ -33,6 +34,7 @@ pub struct ToolContext {
     pub config: Arc<Config>,
     pub restrict_to_workspace: bool,
     pub sandbox_mode: rusty_claw_core::config::SandboxMode,
+    pub browser_pool: Option<Arc<BrowserPool>>,
 }
 
 /// Output from a tool execution.

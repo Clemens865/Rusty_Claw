@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use rusty_claw_core::config::Config;
 use rusty_claw_core::protocol::{
     ConnectParams, Features, GatewayFrame, HelloOk, Policy, ServerInfo, Snapshot, StateVersion,
     PROTOCOL_VERSION,
@@ -18,9 +19,8 @@ use crate::methods::dispatch_method;
 use crate::state::{ConnectionState, GatewayState};
 
 /// Determine the auth mode from config.
-fn auth_mode(state: &GatewayState) -> &str {
-    state
-        .config
+fn auth_mode(config: &Config) -> &str {
+    config
         .gateway
         .as_ref()
         .and_then(|g| g.auth.as_ref())
@@ -41,10 +41,9 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Authenticate a client connection using ConnectParams.
 /// Returns Ok(()) on success, Err(message) on failure.
-fn authenticate(state: &GatewayState, params: &ConnectParams) -> Result<(), String> {
-    let mode = auth_mode(state);
-    let auth_config = state
-        .config
+fn authenticate(config: &Config, params: &ConnectParams) -> Result<(), String> {
+    let mode = auth_mode(config);
+    let auth_config = config
         .gateway
         .as_ref()
         .and_then(|g| g.auth.as_ref());
@@ -100,7 +99,9 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
     // Create event channel for this connection
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<String>();
 
-    let mode = auth_mode(&state).to_string();
+    // Read config snapshot for auth
+    let config = state.read_config().await;
+    let mode = auth_mode(&config).to_string();
     let needs_auth = mode != "none";
 
     // Register connection (not yet authenticated if auth required)
@@ -132,13 +133,21 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                 "sessions.reset".into(),
                 "sessions.patch".into(),
                 "agent".into(),
+                "agent.abort".into(),
+                "agent.status".into(),
                 "wake".into(),
                 "models.list".into(),
                 "channels.status".into(),
+                "channels.login".into(),
+                "channels.logout".into(),
                 "config.get".into(),
                 "config.set".into(),
+                "cron.list".into(),
+                "cron.add".into(),
+                "cron.remove".into(),
                 "skills.list".into(),
                 "skills.get".into(),
+                "talk.config".into(),
                 "node.pair.request".into(),
                 "node.pair.approve".into(),
                 "node.invoke".into(),
@@ -148,6 +157,7 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                 "agent.event".into(),
                 "session.updated".into(),
                 "canvas.operation".into(),
+                "config.changed".into(),
             ],
         },
         snapshot: Snapshot {
@@ -186,7 +196,7 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
     if needs_auth {
         let auth_result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            wait_for_auth(&state, &mut ws_rx, &conn_id),
+            wait_for_auth(&config, &mut ws_rx, &conn_id),
         )
         .await;
 
@@ -301,7 +311,7 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
 
 /// Wait for the client's ConnectParams message and authenticate.
 async fn wait_for_auth(
-    state: &Arc<GatewayState>,
+    config: &Config,
     ws_rx: &mut futures::stream::SplitStream<WebSocket>,
     conn_id: &str,
 ) -> Result<(), String> {
@@ -312,12 +322,12 @@ async fn wait_for_auth(
                 // Try to parse as a ConnectParams (wrapped in a request or raw)
                 if let Ok(GatewayFrame::Request { params: Some(params), .. }) = serde_json::from_str::<GatewayFrame>(&text) {
                     if let Ok(connect) = serde_json::from_value::<ConnectParams>(params) {
-                        return authenticate(state, &connect);
+                        return authenticate(config, &connect);
                     }
                 }
                 // Also try direct ConnectParams parse
                 if let Ok(connect) = serde_json::from_str::<ConnectParams>(&text) {
-                    return authenticate(state, &connect);
+                    return authenticate(config, &connect);
                 }
                 debug!(conn_id = %conn_id, "Received non-auth message during handshake");
                 return Err("Expected ConnectParams for authentication".to_string());
@@ -338,11 +348,11 @@ async fn cleanup_connection(state: &Arc<GatewayState>, conn_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_claw_core::config::{Config, GatewayAuthConfig, GatewayConfig};
+    use rusty_claw_core::config::{GatewayAuthConfig, GatewayConfig};
     use rusty_claw_core::protocol::{AuthParams, ClientInfo, ConnectParams};
 
-    fn make_state_with_auth(mode: &str, token: Option<&str>, password: Option<&str>) -> GatewayState {
-        let config = Config {
+    fn make_config_with_auth(mode: &str, token: Option<&str>, password: Option<&str>) -> Config {
+        Config {
             gateway: Some(GatewayConfig {
                 port: 18789,
                 bind: None,
@@ -358,24 +368,7 @@ mod tests {
                 tailscale: None,
             }),
             ..Default::default()
-        };
-
-        let config = Arc::new(config);
-        let sessions: Arc<dyn rusty_claw_core::session::SessionStore> = Arc::new(
-            rusty_claw_core::session_store::JsonlSessionStore::new(
-                std::env::temp_dir().join("test_sessions"),
-            ),
-        );
-        let channels = Arc::new(rusty_claw_channels::ChannelRegistry::new());
-        let tools = Arc::new(rusty_claw_tools::ToolRegistry::new());
-        let providers = Arc::new(rusty_claw_providers::ProviderRegistry::new("test".into()));
-        let hooks = Arc::new(rusty_claw_plugins::HookRegistry::new());
-        let skills = crate::skills::SkillRegistry::new();
-        let pairing = rusty_claw_core::pairing::PairingStore::new(
-            std::env::temp_dir().join("test_pairing"),
-        );
-
-        GatewayState::new(config, sessions, channels, tools, providers, hooks, skills, pairing)
+        }
     }
 
     fn make_connect_params(auth: Option<AuthParams>) -> ConnectParams {
@@ -399,52 +392,52 @@ mod tests {
 
     #[test]
     fn test_auth_mode_none() {
-        let state = make_state_with_auth("none", None, None);
+        let config = make_config_with_auth("none", None, None);
         let params = make_connect_params(None);
-        assert!(authenticate(&state, &params).is_ok());
+        assert!(authenticate(&config, &params).is_ok());
     }
 
     #[test]
     fn test_auth_token_valid() {
-        let state = make_state_with_auth("token", Some("secret-token"), None);
+        let config = make_config_with_auth("token", Some("secret-token"), None);
         let params = make_connect_params(Some(AuthParams::Token {
             token: "secret-token".into(),
         }));
-        assert!(authenticate(&state, &params).is_ok());
+        assert!(authenticate(&config, &params).is_ok());
     }
 
     #[test]
     fn test_auth_token_invalid() {
-        let state = make_state_with_auth("token", Some("secret-token"), None);
+        let config = make_config_with_auth("token", Some("secret-token"), None);
         let params = make_connect_params(Some(AuthParams::Token {
             token: "wrong-token".into(),
         }));
-        assert!(authenticate(&state, &params).is_err());
+        assert!(authenticate(&config, &params).is_err());
     }
 
     #[test]
     fn test_auth_token_missing() {
-        let state = make_state_with_auth("token", Some("secret-token"), None);
+        let config = make_config_with_auth("token", Some("secret-token"), None);
         let params = make_connect_params(None);
-        assert!(authenticate(&state, &params).is_err());
+        assert!(authenticate(&config, &params).is_err());
     }
 
     #[test]
     fn test_auth_password_valid() {
-        let state = make_state_with_auth("password", None, Some("my-password"));
+        let config = make_config_with_auth("password", None, Some("my-password"));
         let params = make_connect_params(Some(AuthParams::Password {
             password: "my-password".into(),
         }));
-        assert!(authenticate(&state, &params).is_ok());
+        assert!(authenticate(&config, &params).is_ok());
     }
 
     #[test]
     fn test_auth_password_invalid() {
-        let state = make_state_with_auth("password", None, Some("my-password"));
+        let config = make_config_with_auth("password", None, Some("my-password"));
         let params = make_connect_params(Some(AuthParams::Password {
             password: "wrong".into(),
         }));
-        assert!(authenticate(&state, &params).is_err());
+        assert!(authenticate(&config, &params).is_err());
     }
 
     #[test]

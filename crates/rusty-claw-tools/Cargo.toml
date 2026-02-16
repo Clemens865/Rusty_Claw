@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 rusty-claw-core.workspace = true
+rusty-claw-browser.workspace = true
 
 tokio.workspace = true
 serde.workspace = true

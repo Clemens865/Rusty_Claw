@@ -257,6 +257,7 @@ mod tests {
             config: Arc::new(rusty_claw_core::config::Config::default()),
             restrict_to_workspace: false,
             sandbox_mode: rusty_claw_core::config::SandboxMode::Off,
+            browser_pool: None,
         }
     }
 

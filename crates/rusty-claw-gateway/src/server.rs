@@ -24,8 +24,8 @@ pub async fn start_gateway(
     port: u16,
     ui_enabled: bool,
 ) -> anyhow::Result<()> {
-    let bind_addr = state
-        .config
+    let config = state.read_config().await;
+    let bind_addr = config
         .gateway
         .as_ref()
         .and_then(|g| g.bind.clone())
@@ -47,7 +47,7 @@ pub async fn start_gateway(
 
     // Check for TLS config
     #[cfg(feature = "tls")]
-    if let Some(tls_config) = state.config.gateway.as_ref().and_then(|g| g.tls.as_ref()) {
+    if let Some(tls_config) = config.gateway.as_ref().and_then(|g| g.tls.as_ref()) {
         use axum_server::tls_rustls::RustlsConfig;
 
         let tls = RustlsConfig::from_pem_file(&tls_config.cert_path, &tls_config.key_path)

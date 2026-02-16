@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(rusty_claw_core::config::Config::config_dir);
 
-    let config = Arc::new(rusty_claw_core::config::Config::load(&config_path)?);
+    let config = rusty_claw_core::config::Config::load(&config_path)?;
 
     match cli.command {
         Commands::Gateway { port, ui } => {
@@ -221,9 +221,33 @@ async fn main() -> anyhow::Result<()> {
                 rusty_claw_core::pairing::PairingStore::default_path(),
             );
 
+            // Create browser pool (if browser config exists)
+            let browser = config
+                .tools
+                .as_ref()
+                .and_then(|t| t.browser.as_ref())
+                .map(|bc| Arc::new(rusty_claw_browser::BrowserPool::new(bc.clone())));
+
+            // Create cron scheduler
+            let cron_jobs = config
+                .cron
+                .as_ref()
+                .and_then(|c| c.jobs.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            let cron = if !cron_jobs.is_empty() {
+                Some(Arc::new(rusty_claw_gateway::CronScheduler::new(cron_jobs)))
+            } else {
+                None
+            };
+
+            // Wrap config in Arc<RwLock> for runtime mutability
+            let config_rw = Arc::new(tokio::sync::RwLock::new(config));
+
             // Build gateway state
             let state = Arc::new(rusty_claw_gateway::GatewayState::new(
-                config.clone(),
+                config_rw,
+                Some(config_path.clone()),
                 sessions,
                 channels.clone(),
                 tools,
@@ -231,10 +255,17 @@ async fn main() -> anyhow::Result<()> {
                 hooks,
                 skills,
                 pairing,
+                browser,
+                cron.clone(),
             ));
 
+            // Start cron scheduler if configured
+            if let Some(scheduler) = cron {
+                scheduler.start(state.clone());
+            }
+
             // Start channel routers
-            start_channels(&state, &channels, &config).await;
+            start_channels(&state, &channels).await;
 
             // Start gateway
             rusty_claw_gateway::start_gateway(state, port, ui).await?;
@@ -245,18 +276,9 @@ async fn main() -> anyhow::Result<()> {
             model,
             thinking: _,
         } => {
-            let text = match message {
-                Some(text) => text,
-                None => {
-                    tracing::info!("Interactive mode not yet implemented. Use -m \"message\"");
-                    return Ok(());
-                }
-            };
-
-            tracing::info!("Running agent one-shot");
-
             // Create provider registry and get default
             let registry = create_provider_registry(&config)?;
+            let config = Arc::new(config);
             let (provider, credentials) = registry
                 .default()
                 .ok_or_else(|| anyhow::anyhow!("No default provider configured"))?;
@@ -274,92 +296,80 @@ async fn main() -> anyhow::Result<()> {
                 scope: rusty_claw_core::session::SessionScope::PerSender,
             };
             let mut session = rusty_claw_core::session::Session::new(key);
-            if let Some(model) = model {
-                session.meta.model = Some(model);
+            if let Some(ref model) = model {
+                session.meta.model = Some(model.clone());
             }
-
-            // Set up event channel and printer
-            let (event_tx, mut event_rx) =
-                tokio::sync::mpsc::unbounded_channel::<rusty_claw_agent::AgentEvent>();
-
-            // Spawn event printer
-            let printer = tokio::spawn(async move {
-                use rusty_claw_agent::AgentEvent;
-                while let Some(event) = event_rx.recv().await {
-                    match event {
-                        AgentEvent::PartialReply { delta } => {
-                            print!("{delta}");
-                            use std::io::Write;
-                            let _ = std::io::stdout().flush();
-                        }
-                        AgentEvent::BlockReply { is_final: true, .. } => {
-                            println!();
-                        }
-                        AgentEvent::ToolCall { tool, .. } => {
-                            eprintln!("\n[tool: {tool}]");
-                        }
-                        AgentEvent::ToolResult {
-                            tool,
-                            is_error,
-                            content,
-                            ..
-                        } => {
-                            let status = if is_error { "error" } else { "ok" };
-                            // Show truncated result
-                            let preview = if content.len() > 200 {
-                                format!("{}...", &content[..200])
-                            } else {
-                                content
-                            };
-                            eprintln!("[{tool} {status}]: {preview}");
-                        }
-                        AgentEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                        } => {
-                            eprintln!(
-                                "\n[tokens: {input_tokens} in / {output_tokens} out]"
-                            );
-                        }
-                        AgentEvent::Error { message, .. } => {
-                            eprintln!("\n[error: {message}]");
-                        }
-                        _ => {}
-                    }
-                }
-            });
-
-            // Create inbound message
-            let inbound = rusty_claw_core::types::InboundMessage::from_cli_text(&text);
 
             // Create empty hook registry for CLI agent mode
             let hooks = Arc::new(rusty_claw_plugins::HookRegistry::new());
 
-            // Run agent
-            let result = rusty_claw_agent::run_agent(
-                &mut session,
-                inbound,
-                &config,
-                &tools,
-                provider,
-                credentials,
-                event_tx,
-                &hooks,
-            )
-            .await?;
+            if let Some(text) = message {
+                // One-shot mode
+                tracing::info!("Running agent one-shot");
+                run_agent_turn(
+                    &mut session, &text, &config, &tools, provider, credentials, &hooks,
+                )
+                .await?;
+            } else {
+                // Interactive REPL mode
+                println!("Rusty Claw v{} — Interactive Agent", env!("CARGO_PKG_VERSION"));
+                println!("Model: {}", session.meta.model.as_deref().unwrap_or(&config.default_model()));
+                println!("Type /quit to exit, /reset to clear history, /model <name> to switch.\n");
 
-            // Wait for printer
-            let _ = printer.await;
+                let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+                let mut lines = tokio::io::AsyncBufReadExt::lines(stdin);
 
-            if let Some(error) = &result.meta.error {
-                eprintln!("Agent error: {}", error.message);
-                std::process::exit(1);
+                loop {
+                    // Print prompt
+                    eprint!("you> ");
+                    use std::io::Write;
+                    let _ = std::io::stderr().flush();
+
+                    let line = match lines.next_line().await? {
+                        Some(l) => l,
+                        None => break, // EOF
+                    };
+
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    match trimmed {
+                        "/quit" | "/exit" | "/q" => break,
+                        "/reset" => {
+                            session.transcript.clear();
+                            println!("[Session reset]");
+                            continue;
+                        }
+                        cmd if cmd.starts_with("/model ") => {
+                            let new_model = cmd.strip_prefix("/model ").unwrap().trim();
+                            session.meta.model = Some(new_model.to_string());
+                            println!("[Model switched to: {new_model}]");
+                            continue;
+                        }
+                        "/help" => {
+                            println!("  /quit    — Exit the REPL");
+                            println!("  /reset   — Clear conversation history");
+                            println!("  /model X — Switch to model X");
+                            continue;
+                        }
+                        _ => {}
+                    }
+
+                    if let Err(e) = run_agent_turn(
+                        &mut session, trimmed, &config, &tools, provider, credentials, &hooks,
+                    )
+                    .await
+                    {
+                        eprintln!("[Agent error: {e}]");
+                    }
+                }
             }
         }
 
         Commands::Onboard { install_daemon: _ } => {
-            tracing::info!("Starting onboarding wizard");
-            tracing::warn!("Onboard not yet implemented — coming in Phase 1");
+            run_onboard_wizard(&config_path).await?;
         }
 
         Commands::Status => {
@@ -367,6 +377,53 @@ async fn main() -> anyhow::Result<()> {
             println!("Config: {}", config_path.display());
             println!("Workspace: {}", config.workspace_dir().display());
             println!("Gateway port: {}", config.gateway_port());
+            println!("Default model: {}", config.default_model());
+
+            // Binary size
+            if let Ok(exe) = std::env::current_exe() {
+                if let Ok(meta) = std::fs::metadata(&exe) {
+                    let size_mb = meta.len() as f64 / (1024.0 * 1024.0);
+                    println!("Binary size: {size_mb:.1} MB");
+                }
+            }
+
+            // Configured channels
+            let channel_count = [
+                config.channels.as_ref().and_then(|c| c.telegram.as_ref()).map(|_| "telegram"),
+                config.channels.as_ref().and_then(|c| c.discord.as_ref()).map(|_| "discord"),
+                config.channels.as_ref().and_then(|c| c.slack.as_ref()).map(|_| "slack"),
+            ]
+            .iter()
+            .flatten()
+            .count();
+            println!("Channels configured: {channel_count} (+webchat)");
+
+            // Provider count
+            let provider_count = config
+                .models
+                .as_ref()
+                .and_then(|m| m.providers.as_ref())
+                .map(|p| p.len())
+                .unwrap_or(0);
+            println!("Providers configured: {provider_count}");
+
+            // Skills count
+            let skills_dir = config
+                .skills
+                .as_ref()
+                .and_then(|s| s.dir.as_ref())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| config.workspace_dir().join("skills"));
+            let skill_count = if skills_dir.exists() {
+                std::fs::read_dir(&skills_dir)
+                    .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| {
+                        e.path().extension().is_some_and(|ext| ext == "yaml" || ext == "yml")
+                    }).count())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            println!("Skills loaded: {skill_count}");
 
             // Try to check if gateway is running
             let url = format!(
@@ -375,13 +432,17 @@ async fn main() -> anyhow::Result<()> {
             );
             match reqwest::get(&url).await {
                 Ok(resp) if resp.status().is_success() => {
-                    println!("Status: running");
+                    println!("Gateway: running");
                     if let Ok(body) = resp.text().await {
-                        println!("Health: {body}");
+                        if let Ok(health) = serde_json::from_str::<serde_json::Value>(&body) {
+                            if let Some(conns) = health.get("connections").and_then(|v| v.as_u64()) {
+                                println!("  Active connections: {conns}");
+                            }
+                        }
                     }
                 }
                 _ => {
-                    println!("Status: not running");
+                    println!("Gateway: not running");
                 }
             }
         }
@@ -463,7 +524,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Config { action } => match action {
             ConfigAction::Show => {
-                let json = serde_json::to_string_pretty(config.as_ref())?;
+                let json = serde_json::to_string_pretty(&config)?;
                 println!("{json}");
             }
             ConfigAction::Get { key } => {
@@ -643,6 +704,198 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run a single agent turn: send a message, stream the response, print it.
+async fn run_agent_turn(
+    session: &mut rusty_claw_core::session::Session,
+    text: &str,
+    config: &Arc<rusty_claw_core::config::Config>,
+    tools: &rusty_claw_tools::ToolRegistry,
+    provider: &dyn rusty_claw_providers::LlmProvider,
+    credentials: &rusty_claw_providers::Credentials,
+    hooks: &Arc<rusty_claw_plugins::HookRegistry>,
+) -> anyhow::Result<()> {
+    let inbound = rusty_claw_core::types::InboundMessage::from_cli_text(text);
+
+    let (event_tx, mut event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<rusty_claw_agent::AgentEvent>();
+
+    // Spawn event printer
+    let printer = tokio::spawn(async move {
+        use rusty_claw_agent::AgentEvent;
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                AgentEvent::PartialReply { delta } => {
+                    print!("{delta}");
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                }
+                AgentEvent::BlockReply {
+                    is_final: true, ..
+                } => {
+                    println!();
+                }
+                AgentEvent::ToolCall { tool, .. } => {
+                    eprintln!("\n[tool: {tool}]");
+                }
+                AgentEvent::ToolResult {
+                    tool,
+                    is_error,
+                    content,
+                    ..
+                } => {
+                    let status = if is_error { "error" } else { "ok" };
+                    let preview = if content.len() > 200 {
+                        format!("{}...", &content[..200])
+                    } else {
+                        content
+                    };
+                    eprintln!("[{tool} {status}]: {preview}");
+                }
+                AgentEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                } => {
+                    eprintln!("\n[tokens: {input_tokens} in / {output_tokens} out]");
+                }
+                AgentEvent::Error { message, .. } => {
+                    eprintln!("\n[error: {message}]");
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let result = rusty_claw_agent::run_agent(
+        session, inbound, config, tools, provider, credentials, event_tx, hooks,
+    )
+    .await?;
+
+    let _ = printer.await;
+
+    if let Some(error) = &result.meta.error {
+        eprintln!("Agent error: {}", error.message);
+    }
+
+    Ok(())
+}
+
+/// Interactive onboarding wizard for first-time setup.
+async fn run_onboard_wizard(config_path: &std::path::Path) -> anyhow::Result<()> {
+    use dialoguer::{Confirm, Input, Select};
+
+    println!("\n  Rusty Claw v{} — Setup Wizard", env!("CARGO_PKG_VERSION"));
+    println!("  ================================\n");
+
+    // Check for existing config
+    if config_path.exists() {
+        let overwrite = Confirm::new()
+            .with_prompt("A config file already exists. Overwrite?")
+            .default(false)
+            .interact()?;
+
+        if !overwrite {
+            println!("Keeping existing config. Run `rusty-claw doctor` to check your setup.");
+            return Ok(());
+        }
+    }
+
+    // 1. Choose primary provider
+    let providers = &["Anthropic (Claude)", "OpenAI (GPT)", "Google (Gemini)", "Ollama (local)"];
+    let provider_idx = Select::new()
+        .with_prompt("Choose your primary AI provider")
+        .items(providers)
+        .default(0)
+        .interact()?;
+
+    let (provider_id, env_var_name, default_model) = match provider_idx {
+        0 => ("anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-5-20250929"),
+        1 => ("openai", "OPENAI_API_KEY", "gpt-4o"),
+        2 => ("google", "GOOGLE_AI_API_KEY", "gemini-2.0-flash"),
+        3 => ("ollama", "", "llama3.2"),
+        _ => unreachable!(),
+    };
+
+    // 2. Get API key (skip for Ollama)
+    let api_key = if !env_var_name.is_empty() {
+        let existing = std::env::var(env_var_name).unwrap_or_default();
+        if !existing.is_empty() {
+            println!("Found {env_var_name} in environment.");
+            existing
+        } else {
+            Input::<String>::new()
+                .with_prompt(format!("Enter your {provider_id} API key"))
+                .interact_text()?
+        }
+    } else {
+        String::new()
+    };
+
+    // 3. Choose workspace directory
+    let default_workspace = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("rusty-claw");
+    let workspace: String = Input::new()
+        .with_prompt("Workspace directory")
+        .default(default_workspace.display().to_string())
+        .interact_text()?;
+
+    // 4. Choose gateway port
+    let port: u16 = Input::new()
+        .with_prompt("Gateway port")
+        .default(18789)
+        .interact_text()?;
+
+    // 5. Build config JSON
+    let mut config = serde_json::json!({
+        "workspace": workspace,
+        "gateway": {
+            "port": port,
+        },
+        "models": {
+            "default_model": default_model,
+            "providers": [{
+                "id": provider_id,
+            }],
+        },
+    });
+
+    // Add API key to provider config
+    if !api_key.is_empty() {
+        if let Some(providers) = config["models"]["providers"].as_array_mut() {
+            if let Some(p) = providers.first_mut() {
+                p["api_key_env"] = serde_json::json!(env_var_name);
+            }
+        }
+    }
+
+    // 6. Write config
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let config_str = serde_json::to_string_pretty(&config)?;
+    std::fs::write(config_path, &config_str)?;
+    println!("\nConfig written to: {}", config_path.display());
+
+    // 7. Create workspace directory
+    std::fs::create_dir_all(&workspace)?;
+    println!("Workspace created: {workspace}");
+
+    // 8. Set env var hint
+    if !api_key.is_empty() && std::env::var(env_var_name).unwrap_or_default().is_empty() {
+        println!("\nAdd to your shell profile:");
+        println!("  export {env_var_name}=\"{api_key}\"");
+    }
+
+    println!("\nSetup complete! Next steps:");
+    println!("  1. rusty-claw doctor     — Verify your configuration");
+    println!("  2. rusty-claw agent      — Chat with the agent");
+    println!("  3. rusty-claw gateway --ui — Start the gateway with Control UI");
+    println!();
+
+    Ok(())
+}
+
 /// Create a provider registry from config, registering all configured providers.
 fn create_provider_registry(
     config: &rusty_claw_core::config::Config,
@@ -815,7 +1068,6 @@ fn create_channel_registry(
 async fn start_channels(
     state: &Arc<rusty_claw_gateway::GatewayState>,
     channels: &Arc<rusty_claw_channels::ChannelRegistry>,
-    _config: &Arc<rusty_claw_core::config::Config>,
 ) {
     for channel_id in channels.list() {
         if let Some(channel) = channels.get(channel_id) {
