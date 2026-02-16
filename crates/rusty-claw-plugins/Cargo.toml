@@ -1,0 +1,25 @@
+[package]
+name = "rusty-claw-plugins"
+description = "Plugin SDK and runtime for extending Rusty Claw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+wasm = ["wasmtime"]
+
+[dependencies]
+rusty-claw-core.workspace = true
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+
+# WASM plugin sandbox (optional, Phase 3)
+wasmtime = { version = "28", optional = true }

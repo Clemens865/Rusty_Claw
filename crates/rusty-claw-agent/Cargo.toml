@@ -1,0 +1,26 @@
+[package]
+name = "rusty-claw-agent"
+description = "Agent runtime with tool-calling loop and LLM streaming"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rusty-claw-core.workspace = true
+rusty-claw-providers.workspace = true
+rusty-claw-tools.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+futures.workspace = true
+pin-project-lite.workspace = true

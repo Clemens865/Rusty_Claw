@@ -1,0 +1,32 @@
+[package]
+name = "rusty-claw-providers"
+description = "LLM provider abstraction (Anthropic, OpenAI, Google, Ollama, etc.)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["anthropic", "openai"]
+anthropic = []
+openai = []
+google = []
+ollama = []
+bedrock = []
+copilot = []
+
+[dependencies]
+rusty-claw-core.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+pin-project-lite.workspace = true

@@ -1,0 +1,103 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rusty-claw-core",
+    "crates/rusty-claw-gateway",
+    "crates/rusty-claw-agent",
+    "crates/rusty-claw-channels",
+    "crates/rusty-claw-providers",
+    "crates/rusty-claw-tools",
+    "crates/rusty-claw-plugins",
+    "crates/rusty-claw-cli",
+    "crates/rusty-claw-web",
+    "crates/rusty-claw-browser",
+    "crates/rusty-claw-media",
+    "crates/rusty-claw-tts",
+    "crates/rusty-claw-canvas",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Clemens Hoenig"]
+license = "MIT"
+repository = "https://github.com/Clemens865/Rusty_Claw"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# Web framework
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+
+# WebSocket
+tokio-tungstenite = "0.26"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+json5 = "0.4"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Async traits
+async-trait = "0.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# File watching
+notify = "7"
+
+# Crypto
+rand = "0.9"
+sha2 = "0.10"
+
+# Futures
+futures = "0.3"
+pin-project-lite = "0.2"
+
+# Workspace crates (internal)
+rusty-claw-core = { path = "crates/rusty-claw-core" }
+rusty-claw-gateway = { path = "crates/rusty-claw-gateway" }
+rusty-claw-agent = { path = "crates/rusty-claw-agent" }
+rusty-claw-channels = { path = "crates/rusty-claw-channels" }
+rusty-claw-providers = { path = "crates/rusty-claw-providers" }
+rusty-claw-tools = { path = "crates/rusty-claw-tools" }
+rusty-claw-plugins = { path = "crates/rusty-claw-plugins" }
+rusty-claw-cli = { path = "crates/rusty-claw-cli" }
+rusty-claw-web = { path = "crates/rusty-claw-web" }
+rusty-claw-browser = { path = "crates/rusty-claw-browser" }
+rusty-claw-media = { path = "crates/rusty-claw-media" }
+rusty-claw-tts = { path = "crates/rusty-claw-tts" }
+rusty-claw-canvas = { path = "crates/rusty-claw-canvas" }
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
+opt-level = "z"  # Optimize for size
+
+[profile.release-fast]
+inherits = "release"
+opt-level = 3    # Optimize for speed instead
+lto = "fat"
