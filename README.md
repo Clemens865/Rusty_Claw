@@ -6,7 +6,7 @@ Rusty Claw is a personal AI assistant gateway written in Rust, inspired by [Open
 
 ## Status
 
-**Phase 4 complete** — 154 tests passing, zero warnings, zero clippy. Core gateway, agent runtime, 4 channels, 4 providers, 22 tools, 25 WS methods, plugin system with 17 hooks, Control UI, security hardening, and browser automation are all working.
+**Phase 6 complete** — 208 tests passing, zero warnings, zero clippy. Full gateway with 30 WS methods, agent runtime with thinking tokens and image input, 10 channels, 4 providers (6+ services), 24 tools, WASM plugin sandbox, Prometheus metrics, graceful shutdown, and voice pipeline.
 
 See [ROADMAP.md](ROADMAP.md) for upcoming phases and [COMPARISON.md](COMPARISON.md) for a detailed feature comparison with OpenClaw.
 
@@ -14,17 +14,20 @@ See [ROADMAP.md](ROADMAP.md) for upcoming phases and [COMPARISON.md](COMPARISON.
 
 | Component | Status |
 |-----------|--------|
-| **Gateway** | Protocol v3, 25 WS methods, auth, TLS, rate limiting |
-| **Agent** | Tool-calling loop, streaming (7 event types), abort support |
-| **Channels** | Telegram, Discord, Slack, WebChat |
-| **Providers** | Anthropic, OpenAI (+OpenRouter, +Ollama), Google Gemini, Failover |
-| **Tools** | 22 built-in (exec, files, web, memory, sessions, browser, multimedia, canvas) |
-| **Plugins** | 17 lifecycle hooks, PluginApi, PluginManager |
+| **Gateway** | Protocol v3, 30 WS methods, auth, TLS, rate limiting, Prometheus metrics, graceful shutdown |
+| **Agent** | Tool-calling loop, streaming, thinking tokens, image input, personas, multi-agent spawning |
+| **Channels** | Telegram, Discord, Slack, WebChat, WhatsApp, Signal, Google Chat, MS Teams, Matrix, iMessage |
+| **Providers** | Anthropic (extended thinking), OpenAI (+OpenRouter, +Ollama), Google Gemini, Failover |
+| **Tools** | 24 built-in (exec, files, web, memory, sessions, browser, multimedia, canvas, agents.spawn) |
+| **Plugins** | 17 lifecycle hooks, PluginApi, PluginManager, WASM sandbox (wasmtime, feature-gated) |
 | **Skills** | YAML definitions, hot-reload, prompt injection |
 | **Security** | WS auth, SSRF protection, exec hardening, Docker sandbox, per-IP rate limiting |
+| **Voice** | VAD, STT (Whisper), TTS streaming (ElevenLabs), binary WS frames, push/vad modes |
+| **Context** | Token estimation, auto-compaction (LLM summarize), file_list (glob), TOOLS.md loading |
+| **Production** | Structured logging (JSON/plain), config validation, enhanced health endpoint |
 | **Control UI** | Embedded SPA — Dashboard, Sessions, Chat, Channels, Config |
 | **CLI** | Interactive REPL, onboarding wizard, doctor, migrate, status |
-| **Tests** | 154 (unit + integration), CI with GitHub Actions |
+| **Tests** | 208 (unit + integration), CI with GitHub Actions |
 
 ## Architecture
 
@@ -36,8 +39,8 @@ rusty_claw/
     rusty-claw-agent/       # Agent runtime, tool loop, streaming
     rusty-claw-channels/    # Channel trait + Telegram, Discord, Slack, WebChat
     rusty-claw-providers/   # LLM providers (Anthropic, OpenAI, Google, Failover)
-    rusty-claw-tools/       # 22 built-in tools (exec, fs, web, memory, browser, ...)
-    rusty-claw-plugins/     # Plugin SDK + runtime (17 hooks)
+    rusty-claw-tools/       # 24 built-in tools (exec, fs, web, memory, browser, ...)
+    rusty-claw-plugins/     # Plugin SDK + runtime (17 hooks, WASM sandbox)
     rusty-claw-cli/         # CLI entry point (rusty-claw binary)
     rusty-claw-web/         # Control UI + WebChat (embedded SPA)
     rusty-claw-browser/     # CDP browser automation (chromiumoxide)

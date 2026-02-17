@@ -1,6 +1,6 @@
 # Rusty Claw Roadmap
 
-**Last updated:** 2026-02-16
+**Last updated:** 2026-02-17
 
 ---
 
@@ -42,78 +42,66 @@ Core gateway with WebSocket protocol v3, Telegram channel, Anthropic provider, 4
 
 **Current state:** 154 tests, zero warnings, zero clippy. 25 WS methods, 22 tools, 4 providers, 4 channels, 17 hooks. ~36K lines of Rust across 13 crates.
 
----
+### Phase 5: Voice Pipeline + Channels + File Management
+- **5a Voice:** VAD (energy-based RMS), VoiceSession (push/vad modes), STT (pcm_to_wav + Whisper API), TTS streaming (ElevenLabs), binary WS frame handling, talk.start/stop/mode WS methods, AudioDelta agent event
+- **5b Channels:** WhatsApp (Cloud API, HMAC verify), Signal (signal-cli REST), Google Chat (webhook), MS Teams (Bot Framework, OAuth2), Matrix (Client-Server API), iMessage (BlueBubbles HTTP). All feature-gated with typed configs
+- **5c File+Context:** file_list tool (glob), TOOLS.md loading, token estimation, SessionConfig (max_context_tokens, auto_compact, compact_keep_recent), transcript compaction (LLM summarize old + keep recent), sessions.compact WS method
 
-## Phase 5: Voice Pipeline + Remaining Channels (Next)
+### Phase 6: Production Hardening + Agent Features + WASM
+- **6b Production:** Graceful shutdown (SIGINT+SIGTERM, drain), structured logging (JSON/plain, configurable), Prometheus metrics (feature-gated), enhanced health endpoint (uptime, providers, channels), config validation (warnings+errors)
+- **6c Agent:** Thinking token pass-through (Anthropic extended thinking), image input support (OpenAI+Gemini multimodal), per-session personas (custom system prompts), multi-agent spawning (agents.spawn WS method, depth limits)
+- **6a WASM:** WasmPluginLoader (wasmtime engine), WasmPluginAdapter+WasmToolAdapter (Plugin+Tool trait impls), manager integration (add_wasm_plugin, CLI scanning)
 
-### 5a: Voice Pipeline
-Full voice conversation support matching OpenClaw's talk mode.
-
-- **STT streaming:** WebSocket-based audio stream from client to server, real-time transcription via Groq Whisper or local whisper.cpp
-- **TTS streaming:** Chunked audio delivery (ElevenLabs streaming API, or local Piper TTS)
-- **Voice Activity Detection (VAD):** Server-side silence detection for turn-taking
-- **Talk mode WS methods:** `talk.start`, `talk.stop`, `talk.mode` (push-to-talk vs. auto)
-- **Audio codec support:** Opus encoding/decoding for bandwidth-efficient voice transport
-- **Integration:** Wire into existing `tts` and `transcription` tools, expose via gateway events
-
-### 5b: Remaining Channels
-Expand from 4 to 10+ channels to approach OpenClaw's 14.
-
-| Channel | Approach | Priority |
-|---------|----------|----------|
-| WhatsApp | HTTP bridge to Baileys sidecar (Node.js) or WhatsApp Business API | P0 |
-| Signal | `presage` crate (native Rust Signal client) or signal-cli bridge | P1 |
-| iMessage | BlueBubbles HTTP API integration | P1 |
-| Google Chat | Google Workspace API (webhook + polling) | P2 |
-| Microsoft Teams | Microsoft Graph API (bot framework) | P2 |
-| Matrix | `matrix-sdk` crate (native Rust) | P2 |
-
-### 5c: File Management + Context
-OpenClaw-compatible workspace file management.
-
-- **File manager tools:** `file_list`, `file_upload`, `file_download`, `file_delete`
-- **Context window management:** Automatic transcript compaction when approaching token limits
-- **AGENTS.md / SOUL.md / TOOLS.md:** Auto-load workspace identity files into system prompt
-- **$include directives:** Config modularity matching OpenClaw
+**Current state:** 208 tests, zero warnings, zero clippy. 30 WS methods, 24 tools, 4 providers, 10 channels, 17 hooks, WASM sandbox. ~40K lines of Rust across 13 crates.
 
 ---
 
-## Phase 6: Plugin Ecosystem + Production Hardening
+## Phase 7: Agentic Loop Depth + Multi-Agent Orchestration (Next)
 
-### 6a: WASM Plugin Sandbox
-Move beyond native-only plugins to sandboxed WASM execution.
+### 7a: Context Overflow Auto-Recovery
+Match OpenClaw's resilient agent loop.
 
-- **wasmtime integration:** Load `.wasm` plugin modules at runtime
-- **WASI Preview 2:** Scoped filesystem/network access for plugins
-- **Component Model:** Typed interfaces for tools, hooks, channels, providers
-- **Hot-loading:** Add/remove/update plugins without gateway restart
-- **Plugin registry:** Discover and install community plugins from a registry
+- **Retry wrapper:** 3-attempt outer loop around agent run with error classification
+- **Context overflow recovery:** Auto-compact + tool result truncation + retry on overflow
+- **Tool result truncation:** Last-resort recovery for individual oversized results (head+tail format)
+- **FailoverError classification:** `rate_limit`, `auth`, `billing`, `context_overflow`, `timeout`
+- **Thinking level fallback:** Parse rejection error → retry with lower level
+- **Auth profile rotation:** Multiple API keys per provider with cooldown tracking, round-robin
 
-### 6b: Production Hardening
-Make Rusty Claw production-ready for always-on deployments.
+### 7b: Context Pruning Extension
+Non-LLM context management (used BEFORE expensive LLM compaction).
 
-- **Graceful shutdown:** Drain active connections, finish pending agent runs
-- **Structured logging:** JSON log output, configurable levels per crate
-- **Metrics export:** Prometheus-compatible metrics (message throughput, latency, memory)
-- **Health checks:** Deeper health probes (provider connectivity, channel status, disk space)
-- **Crash recovery:** Persist in-flight agent state, resume on restart
-- **Systemd unit file:** Ready-made service configuration
-- **Automatic updates:** Self-update mechanism (GitHub releases + binary replacement)
+- **Soft trim:** When context exceeds `softTrimRatio`, truncate large tool results to head+tail format
+- **Hard clear:** When context exceeds `hardClearRatio`, replace tool result content with placeholder
+- **Configurable:** `keepLastAssistants`, `maxChars`, `headChars`, `tailChars`, per-tool allowlist
+- **Multi-stage compaction:** Chunk → summarize per chunk → merge partial summaries
+- **Compaction safeguard:** Preserve post-compaction context sections and tool failures
 
-### 6c: Advanced Agent Features
-Close the remaining agent capability gaps.
+### 7c: Advanced Sub-Agent Orchestration
+Full parity with OpenClaw's multi-agent system.
 
-- **Multi-agent orchestration:** `sessions_spawn` for sub-agent tasks with lineage tracking
-- **Thinking/reasoning tokens:** Extended thinking support for Claude, o1-style reasoning display
-- **Image input:** Pass images to vision-capable models (already in protocol, needs tool + provider wiring)
-- **Streaming tool results:** Progressive tool output for long-running operations
-- **Agent personas:** Per-session personality/instruction switching
+- **SubagentRunRegistry:** In-memory + disk-persisted registry tracking all sub-agent runs
+- **Subagent steer:** Redirect running sub-agent with new instructions (abort + re-prompt)
+- **Cascade kill:** Recursively abort all descendants of a sub-agent
+- **Announce flow:** Structured completion notification injected as system message to parent
+- **Concurrent child limits:** `maxChildrenPerAgent` config (default 5)
+- **Agent allowlist:** `subagents.allowAgents` config controls which agents can spawn
+- **Run timeout:** Configurable per-sub-agent timeout with cleanup
+
+### 7d: Multi-Agent Identity
+Named agents with independent workspaces and per-channel identity.
+
+- **Agent list config:** `agents.list[]` with id, name, workspace, model, skills, tools
+- **Per-channel identity overrides:** Layered resolution (account → channel → global → agent)
+- **Agent workspace isolation:** Each agent gets its own workspace directory
+- **Session write locks:** `acquireSessionWriteLock()` prevents concurrent transcript corruption
+- **Transcript policies:** Per-provider turn validation and repair rules (Anthropic, Gemini)
 
 ---
 
-## Phase 7: Mobile, Embedded, and Edge Targets
+## Phase 8: Mobile, Embedded, and Edge Targets
 
-### 7a: Cross-Compilation Matrix
+### 8a: Cross-Compilation Matrix
 Verify and optimize for all target platforms.
 
 | Target | Status | Notes |
@@ -127,7 +115,7 @@ Verify and optimize for all target platforms.
 | x86_64-pc-windows-msvc | Planned | Windows |
 | wasm32-wasi | Stretch | Cloudflare Workers, edge compute |
 
-### 7b: Mobile Library
+### 8b: Mobile Library
 Expose Rusty Claw as a library for mobile apps.
 
 - **C FFI layer:** Expose core gateway/agent functions via `extern "C"`
@@ -135,7 +123,7 @@ Expose Rusty Claw as a library for mobile apps.
 - **Kotlin/JNI bindings:** For Android integration
 - **Embedded mode:** Run gateway in-process (no network, direct function calls)
 
-### 7c: Embedded Optimization
+### 8c: Embedded Optimization
 Optimize for resource-constrained targets.
 
 - **Single-threaded runtime:** `tokio::runtime::Builder::new_current_thread()` via feature flag
@@ -145,22 +133,22 @@ Optimize for resource-constrained targets.
 
 ---
 
-## Phase 8: Ecosystem and Community
+## Phase 9: Ecosystem and Community
 
-### 8a: Documentation
+### 9a: Documentation
 - API reference (auto-generated from Rust doc comments)
 - Getting Started guide
 - Channel setup guides (one per channel)
 - Plugin development guide
 - Migration guide (OpenClaw to Rusty Claw)
 
-### 8b: Community
+### 9b: Community
 - Plugin template repository
 - Skill marketplace (curated YAML skills)
 - Discord/Matrix community server
 - Contribution guide + good-first-issues
 
-### 8c: v1.0 Release Criteria
+### 9c: v1.0 Release Criteria
 - [ ] All 14+ OpenClaw channels working
 - [ ] WASM plugin sandbox stable
 - [ ] Native app compatibility verified (macOS, iOS, Android)
@@ -174,18 +162,17 @@ Optimize for resource-constrained targets.
 ## Feature Dependency Graph
 
 ```
-Phase 5a (Voice) ────────────┐
-Phase 5b (Channels) ─────────┤
-Phase 5c (File Mgmt) ────────┤
-                              ├──→ Phase 6a (WASM Plugins)
-                              ├──→ Phase 6b (Production)
-                              ├──→ Phase 6c (Agent Features)
-                              │
-                              ├──→ Phase 7a (Cross-compile)
-                              ├──→ Phase 7b (Mobile)
-                              ├──→ Phase 7c (Embedded)
-                              │
-                              └──→ Phase 8 (v1.0)
+Phase 1-6 (COMPLETE) ─────────┐
+                               ├──→ Phase 7a (Overflow Recovery)
+                               ├──→ Phase 7b (Context Pruning)
+                               ├──→ Phase 7c (Sub-Agent Orchestration)
+                               ├──→ Phase 7d (Multi-Agent Identity)
+                               │
+                               ├──→ Phase 8a (Cross-compile)
+                               ├──→ Phase 8b (Mobile)
+                               ├──→ Phase 8c (Embedded)
+                               │
+                               └──→ Phase 9 (v1.0)
 ```
 
-Phases 5a/5b/5c are independent and can be worked in parallel. Phase 6 builds on the expanded surface area. Phase 7 is independent of 6 and can run in parallel. Phase 8 gates on all prior phases.
+Phase 7a-d are largely independent and can be worked in parallel. Phase 8 is independent of 7. Phase 9 gates on all prior phases.

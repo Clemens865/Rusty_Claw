@@ -1,14 +1,14 @@
 # Rusty Claw vs OpenClaw: Comparative Analysis
 
-**Date:** 2026-02-16
-**Rusty Claw version:** Phase 4 complete (pre-alpha)
-**OpenClaw version:** Latest (TypeScript, ~198K stars)
+**Date:** 2026-02-17
+**Rusty Claw version:** Phase 6 complete (pre-alpha)
+**OpenClaw version:** Latest (TypeScript, ~204K stars)
 
 ---
 
 ## Executive Summary
 
-Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** after Phase 4, with fundamental architectural advantages in performance, security, and deployment flexibility. The remaining gaps are primarily in channel coverage (4/14+), advanced voice pipeline, WASM plugin sandbox, and some specialized WS methods.
+Rusty Claw implements approximately **75-80% of OpenClaw's feature surface** after Phase 6, with fundamental architectural advantages in performance, security, and deployment flexibility. The remaining gaps are primarily in agentic loop sophistication (context overflow recovery, auth rotation, thinking fallbacks), multi-agent orchestration depth (steer, announce, persistent registry), and some specialized WS methods (~30/80+).
 
 ---
 
@@ -24,7 +24,7 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Password auth | Yes | Yes | Parity |
 | TLS (rustls) | Yes (Node TLS) | Yes (feature flag) | Parity |
 | Per-IP rate limiting | Plugin-based | Built-in | Advantage |
-| WS methods | ~80+ | 25 | Gap (~55 methods) |
+| WS methods | ~80+ | 30 | Gap (~50 methods) |
 | HTTP chat API | Yes | No | Gap |
 | State versioning (presence/health) | Yes | Partial | Gap |
 
@@ -55,11 +55,17 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Skills injection into prompt | Yes | Yes | Parity |
 | Agent abort (CancellationToken) | Yes | Yes | Parity |
 | Session-scoped context | Yes | Yes | Parity |
-| Multi-agent / sub-agent spawn | Yes | Partial (tools exist) | Gap |
-| Transcript compaction | Yes | No | Gap |
-| Extended thinking (Claude) | Yes | No | Gap |
-| Image/vision input | Yes | No | Gap |
-| Token budget management | Yes | No | Gap |
+| Multi-agent / sub-agent spawn | Yes | Yes (agents.spawn WS, depth limits) | Parity |
+| Transcript compaction | Yes | Yes (LLM summarize + keep recent) | Parity |
+| Extended thinking (Claude) | Yes | Yes (thinking budget tokens) | Parity |
+| Image/vision input | Yes | Yes (OpenAI + Gemini multimodal) | Parity |
+| Per-session personas | Yes | Yes (custom system prompts) | Parity |
+| Token budget management | Yes | Partial (estimation, auto-compact) | Gap |
+| Context overflow auto-recovery | Yes (3-attempt) | No (single pass) | Gap |
+| Context pruning (non-LLM) | Yes (soft-trim + hard-clear) | No | Gap |
+| Subagent steer/announce | Yes | No | Gap |
+| Auth profile rotation | Yes | No | Gap |
+| Thinking level fallback | Yes | No | Gap |
 
 ### 1.3 LLM Providers
 
@@ -87,17 +93,17 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Discord | Yes | Yes | Parity |
 | Slack | Yes | Yes | Parity |
 | WebChat | Yes | Yes | Parity |
-| WhatsApp (Baileys) | Yes | No | Gap |
-| Signal | Yes | No | Gap |
-| iMessage (BlueBubbles) | Yes | No | Gap |
-| Google Chat | Yes | No | Gap |
-| Microsoft Teams | Yes | No | Gap |
-| Matrix | Yes | No | Gap |
+| WhatsApp (Cloud API) | Yes | Yes | Parity |
+| Signal (signal-cli REST) | Yes | Yes | Parity |
+| iMessage (BlueBubbles) | Yes | Yes | Parity |
+| Google Chat (webhook) | Yes | Yes | Parity |
+| Microsoft Teams (Bot Framework) | Yes | Yes | Parity |
+| Matrix (Client-Server API) | Yes | Yes | Parity |
 | LINE | Yes | No | Gap |
 | Zalo | Yes | No | Gap |
 | Facebook Messenger | Yes | No | Gap |
 | Instagram DMs | Yes | No | Gap |
-| **Total channels** | **14+** | **4** | Gap (10+) |
+| **Total channels** | **14+** | **10** | Near-parity |
 
 ### 1.5 Tools
 
@@ -114,11 +120,11 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Audio transcription | Yes | Yes (Groq + OpenAI) | Parity |
 | Browser (CDP) — 6 tools | Yes | Yes (feature-flagged) | Parity |
 | Canvas | Yes | Yes | Parity |
-| Sessions spawn | Yes | No | Gap |
+| Sessions/agents spawn | Yes | Yes | Parity |
 | File upload/download | Yes | No | Gap |
 | Channel-specific actions | Yes | No | Gap |
 | Cron tool | Yes | No (API only) | Gap |
-| **Total tools** | **25+** | **22** | Near-parity |
+| **Total tools** | **25+** | **24** | Near-parity |
 
 ### 1.6 Plugin System
 
@@ -129,7 +135,7 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Plugin API (tools, hooks, channels, providers) | Yes | Yes | Parity |
 | Plugin manager (async init) | Yes | Yes | Parity |
 | Native plugins | Yes (JS) | Yes (Rust) | Different approach |
-| WASM sandbox | No (Node.js) | Planned (wasmtime) | Future advantage |
+| WASM sandbox | No (Node.js) | Yes (wasmtime, feature-gated) | Advantage |
 | npm plugin ecosystem | Large | None yet | Gap |
 | Hot-loadable plugins | Yes | Partial (skills hot-reload) | Gap |
 
@@ -164,12 +170,12 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 
 | Feature | OpenClaw | Rusty Claw | Status |
 |---------|----------|------------|--------|
-| STT (speech-to-text) | Yes (streaming) | No | Gap |
-| TTS (text-to-speech) | Yes (streaming) | Tool only (no streaming) | Gap |
-| Voice Activity Detection | Yes | No | Gap |
-| Push-to-talk / auto modes | Yes | No | Gap |
-| talk.config WS method | Yes | Yes | Partial |
-| Audio WebSocket transport | Yes | No | Gap |
+| STT (speech-to-text) | Yes (streaming) | Yes (Whisper API, pcm_to_wav) | Parity |
+| TTS (text-to-speech) | Yes (streaming) | Yes (ElevenLabs streaming) | Parity |
+| Voice Activity Detection | Yes | Yes (energy-based RMS) | Parity |
+| Push-to-talk / auto modes | Yes | Yes (push/vad modes) | Parity |
+| talk.config/start/stop/mode WS methods | Yes | Yes (4 methods) | Parity |
+| Audio WebSocket transport | Yes | Yes (binary WS frames) | Parity |
 
 ### 1.10 Infrastructure
 
@@ -183,7 +189,10 @@ Rusty Claw implements approximately **60-70% of OpenClaw's feature surface** aft
 | Control UI | Yes (Svelte) | Yes (vanilla JS SPA) | Parity |
 | Systemd service | Yes | No | Gap |
 | Self-update | Yes | No | Gap |
-| Prometheus metrics | Yes | No | Gap |
+| Prometheus metrics | Yes | Yes (feature-gated) | Parity |
+| Graceful shutdown | Yes | Yes (SIGINT+SIGTERM, drain) | Parity |
+| Structured logging | Yes | Yes (JSON/plain, configurable) | Parity |
+| Config validation | N/A | Yes (warnings + errors) | Advantage |
 
 ---
 
@@ -236,41 +245,41 @@ Rusty Claw runs on targets **impossible for OpenClaw**:
 
 ## 3. Where OpenClaw Leads
 
-### 3.1 Channel Coverage (Biggest Gap)
+### 3.1 Agentic Loop Sophistication (Biggest Gap)
 
-OpenClaw supports **14+ messaging channels** vs Rusty Claw's **4**. The missing channels (WhatsApp, Signal, iMessage, Teams, Google Chat, Matrix, LINE, etc.) are critical for users who depend on specific platforms. WhatsApp in particular is the most-requested channel.
+OpenClaw's agent runtime has a sophisticated outer retry loop with **context overflow auto-recovery** (3 attempts), **auth profile rotation** (multiple API keys with cooldown), **thinking level fallback** (parse error → lower level → retry), and **rich error classification** (`rate_limit`, `auth`, `billing`, `context_overflow`). Rusty Claw has a simpler single-pass loop.
 
-**Path to close:** Phase 5b targets 6 additional channels. WhatsApp requires a bridge approach (Baileys is JS-only). Signal has a native Rust client (`presage`). Matrix has `matrix-sdk`. The rest are HTTP/webhook-based.
+**Path to close:** Phase 7 should implement the retry wrapper with overflow recovery, tool result truncation, and error classification.
 
-### 3.2 Voice Pipeline
+### 3.2 Multi-Agent Orchestration Depth
 
-OpenClaw has a **complete voice conversation system** with streaming STT/TTS, VAD, push-to-talk, and audio WebSocket transport. Rusty Claw only has a `tts` tool and `transcription` tool — no real-time voice conversation.
+OpenClaw has a full sub-agent system with **steer** (redirect running sub-agent), **cascade kill** (recursively abort descendants), **announce flow** (structured completion notification to parent), **persistent registry** (survives restarts), and **concurrent child limits**. Rusty Claw has basic spawning with depth limits but lacks these advanced orchestration primitives.
 
-**Path to close:** Phase 5a implements the full voice pipeline.
+**Path to close:** Phase 7 should add SubagentRunRegistry, steer/announce, and cascade kill.
 
-### 3.3 WS Method Coverage
+### 3.3 Context Management Layers
 
-OpenClaw exposes **~80+ WS methods** vs Rusty Claw's **25**. Many missing methods are for file management, advanced session control, presence, health monitoring, and HTTP chat API.
+OpenClaw uses a **multi-layer context management** system: non-LLM context pruning (soft-trim/hard-clear of tool results), multi-stage LLM compaction (chunk → summarize → merge), compaction safeguard (preserve failures), and tool result truncation as last resort. Rusty Claw has single-pass LLM compaction only.
 
-**Path to close:** Phase 5c (file management) + Phase 6 (production hardening) add the most impactful missing methods. Some methods are low-priority (OpenClaw has accumulated many over years of development).
+**Path to close:** Phase 7 should add context pruning extension and multi-stage compaction.
 
-### 3.4 Plugin Ecosystem
+### 3.4 WS Method Coverage
 
-OpenClaw has a **mature npm-based plugin ecosystem** with community-contributed plugins. Rusty Claw has the plugin infrastructure (17 hooks, PluginApi, PluginManager) but no ecosystem yet.
+OpenClaw exposes **~80+ WS methods** vs Rusty Claw's **30**. Many missing methods are for file management, presence, advanced health monitoring, HTTP chat API, and subagent management.
 
-**Path to close:** Phase 6a adds WASM plugin sandbox. Ecosystem growth requires time and community adoption.
+**Path to close:** Most impactful remaining methods are low-priority incremental additions.
 
-### 3.5 Context Management
+### 3.5 Provider & Identity Breadth
 
-OpenClaw has **transcript compaction** (automatic summarization when approaching token limits), **token budget management**, and **extended thinking** display. Rusty Claw lacks these.
+OpenClaw supports **15+ providers** with auth profile rotation, plus a full multi-agent identity system (named agents with independent workspaces, per-channel identity overrides). Rusty Claw has 4 providers and single-agent persona.
 
-**Path to close:** Phase 6c adds these agent features.
+**Path to close:** Additional providers are straightforward (most are OpenAI-compatible). Multi-agent identity is a Phase 7 target.
 
 ### 3.6 Native App Compatibility
 
 OpenClaw has **native apps** for macOS, iOS, and Android. Rusty Claw is wire-compatible with protocol v3, but native app compatibility has not been verified.
 
-**Path to close:** Needs integration testing with actual OpenClaw native apps. The protocol is implemented — verification is the gap.
+**Path to close:** Needs integration testing with actual OpenClaw native apps.
 
 ---
 
@@ -280,27 +289,27 @@ OpenClaw has **native apps** for macOS, iOS, and Android. Rusty Claw is wire-com
 
 | Category | OpenClaw Features | Rusty Claw Has | Coverage |
 |----------|-------------------|----------------|----------|
-| Gateway / Protocol | Core | Core | **90%** |
-| WS Methods | ~80+ | 25 | **31%** |
-| Agent Runtime | Full | Core loop + streaming | **70%** |
-| Providers | 10+ services | 6+ services (4 impls) | **60%** |
-| Channels | 14+ | 4 | **29%** |
-| Tools | 25+ | 22 | **88%** |
-| Plugin System | Full + ecosystem | Infrastructure only | **60%** |
-| Skills | Full + library | Infrastructure only | **70%** |
+| Gateway / Protocol | Core | Core + metrics + graceful shutdown | **90%** |
+| WS Methods | ~80+ | 30 | **38%** |
+| Agent Runtime | Full (overflow recovery, auth rotation) | Core + thinking + images + personas + spawning | **75%** |
+| Providers | 15+ services | 6+ services (4 impls) | **50%** |
+| Channels | 14+ | 10 | **71%** |
+| Tools | 25+ | 24 | **96%** |
+| Plugin System | Full + ecosystem | Infrastructure + WASM sandbox | **65%** |
+| Skills | Full + library | Infrastructure + hot-reload | **70%** |
 | Security | Good | Better | **120%** |
-| Voice/Talk | Full pipeline | Basic tools only | **20%** |
-| Infrastructure | Production-ready | Dev/test-ready | **70%** |
-| **Overall** | | | **~60-65%** |
+| Voice/Talk | Full pipeline | Full pipeline (VAD, STT, TTS streaming) | **85%** |
+| Infrastructure | Production-ready | Production-ready (metrics, logging, shutdown) | **85%** |
+| **Overall** | | | **~75-80%** |
 
 ### Lines of Code Comparison
 
 | Metric | OpenClaw | Rusty Claw |
 |--------|----------|------------|
 | Language | TypeScript | Rust |
-| Core LoC | ~50K+ (estimated) | ~36K |
+| Core LoC | ~50K+ (estimated) | ~40K |
 | Dependencies LoC | ~20M+ (node_modules) | ~500K (compiled crates) |
-| Test count | Unknown | 154 |
+| Test count | Unknown | 208 |
 
 ---
 
@@ -308,10 +317,11 @@ OpenClaw has **native apps** for macOS, iOS, and Android. Rusty Claw is wire-com
 
 ### What to prioritize next
 
-1. **Channels** (biggest user-facing gap) — WhatsApp alone would significantly expand the user base
-2. **Voice pipeline** (differentiation opportunity) — Can be more efficient than OpenClaw's Node.js implementation
-3. **Context management** (agent quality) — Compaction and token budgets directly affect conversation quality
-4. **Production hardening** (deployment readiness) — Metrics, graceful shutdown, systemd integration
+1. **Context overflow auto-recovery** (reliability) — 3-attempt compact + truncate + retry prevents stuck sessions
+2. **Context pruning extension** (cost reduction) — Non-LLM soft-trim/hard-clear before expensive LLM compaction
+3. **Subagent orchestration** (agent quality) — Steer, announce, cascade kill, persistent registry
+4. **Auth profile rotation** (production reliability) — Multiple API keys with cooldown tracking
+5. **Multi-agent identity** (deployment flexibility) — Named agents with independent workspaces
 
 ### Where Rusty Claw will always win
 
@@ -324,5 +334,6 @@ OpenClaw has **native apps** for macOS, iOS, and Android. Rusty Claw is wire-com
 
 - **Ecosystem:** Years of community plugins, skills, integrations
 - **Native apps:** Polished macOS/iOS/Android apps
-- **Channel breadth:** 14+ channels vs our 4 (shrinking gap)
+- **Channel breadth:** 14+ channels vs our 10 (closing gap)
+- **Agentic loop depth:** Retry logic, auth rotation, thinking fallbacks
 - **Maturity:** Battle-tested in production by thousands of users
