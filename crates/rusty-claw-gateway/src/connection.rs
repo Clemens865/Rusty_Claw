@@ -94,6 +94,9 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
     let conn_id = Uuid::new_v4().to_string();
     info!(conn_id = %conn_id, "New WebSocket connection");
 
+    #[cfg(feature = "metrics")]
+    crate::metrics::record_ws_connect();
+
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     // Create event channel for this connection
@@ -113,6 +116,8 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                 conn_id: conn_id.clone(),
                 event_tx: event_tx.clone(),
                 authenticated: !needs_auth,
+                voice_session: None,
+                binary_event_tx: None,
             },
         );
     }
@@ -132,6 +137,7 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                 "sessions.delete".into(),
                 "sessions.reset".into(),
                 "sessions.patch".into(),
+                "sessions.compact".into(),
                 "agent".into(),
                 "agent.abort".into(),
                 "agent.status".into(),
@@ -148,16 +154,21 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                 "skills.list".into(),
                 "skills.get".into(),
                 "talk.config".into(),
+                "talk.start".into(),
+                "talk.stop".into(),
+                "talk.mode".into(),
                 "node.pair.request".into(),
                 "node.pair.approve".into(),
                 "node.invoke".into(),
                 "node.event".into(),
+                "agents.spawn".into(),
             ],
             events: vec![
                 "agent.event".into(),
                 "session.updated".into(),
                 "canvas.operation".into(),
                 "config.changed".into(),
+                "audio.delta".into(),
             ],
         },
         snapshot: Snapshot {
@@ -246,11 +257,30 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
         }
     }
 
-    // Spawn event sender task
+    // Create binary event channel for voice audio
+    let (binary_tx, mut binary_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    {
+        let mut connections = state.connections.write().await;
+        if let Some(conn) = connections.get_mut(&conn_id) {
+            conn.binary_event_tx = Some(binary_tx);
+        }
+    }
+
+    // Spawn event sender task (handles both text and binary)
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = event_rx.recv().await {
-            if ws_tx.send(Message::Text(msg.into())).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                Some(msg) = event_rx.recv() => {
+                    if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Some(data) = binary_rx.recv() => {
+                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
@@ -285,6 +315,17 @@ pub async fn handle_ws_connection(state: Arc<GatewayState>, ws: WebSocket) {
                         if let Ok(msg) = serde_json::to_string(&error_frame) {
                             let _ = event_tx.send(msg);
                         }
+                    }
+                }
+            }
+            Ok(Message::Binary(data)) => {
+                // Route binary frames to voice session if active
+                let connections = state.connections.read().await;
+                if let Some(conn) = connections.get(&conn_id) {
+                    if let Some(ref voice) = conn.voice_session {
+                        let _ = voice.audio_tx.send(data.to_vec());
+                    } else {
+                        debug!(conn_id = %conn_id, "Binary frame received but no voice session active");
                     }
                 }
             }
@@ -343,6 +384,9 @@ async fn wait_for_auth(
 async fn cleanup_connection(state: &Arc<GatewayState>, conn_id: &str) {
     let mut connections = state.connections.write().await;
     connections.remove(conn_id);
+
+    #[cfg(feature = "metrics")]
+    crate::metrics::record_ws_disconnect();
 }
 
 #[cfg(test)]

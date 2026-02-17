@@ -198,16 +198,48 @@ impl LlmProvider for OpenAiProvider {
         for entry in transcript {
             match entry {
                 TranscriptEntry::User { content, .. } => {
-                    let text = content
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !text.is_empty() {
-                        messages.push(json!({ "role": "user", "content": text }));
+                    let has_images = content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
+
+                    if has_images {
+                        // Use array-of-parts format for multimodal
+                        let parts: Vec<serde_json::Value> = content
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => {
+                                    Some(json!({"type": "text", "text": text}))
+                                }
+                                ContentBlock::Image { source } => {
+                                    let url = if source.source_type == "base64" {
+                                        format!(
+                                            "data:{};base64,{}",
+                                            source.media_type, source.data
+                                        )
+                                    } else {
+                                        source.data.clone()
+                                    };
+                                    Some(json!({
+                                        "type": "image_url",
+                                        "image_url": {"url": url}
+                                    }))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        if !parts.is_empty() {
+                            messages.push(json!({"role": "user", "content": parts}));
+                        }
+                    } else {
+                        let text = content
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !text.is_empty() {
+                            messages.push(json!({ "role": "user", "content": text }));
+                        }
                     }
                 }
                 TranscriptEntry::Assistant { content, .. } => {
@@ -665,5 +697,53 @@ mod tests {
             chunk.choices[0].finish_reason.as_deref(),
             Some("stop")
         );
+    }
+
+    // --- 6c-2: Image Input test ---
+
+    #[test]
+    fn test_format_messages_with_image() {
+        use chrono::Utc;
+        use rusty_claw_core::types::ImageSource;
+
+        let provider = OpenAiProvider::openai(None);
+        let transcript = vec![TranscriptEntry::User {
+            content: vec![
+                ContentBlock::Text {
+                    text: "What is in this image?".into(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: "image/png".into(),
+                        data: "aWtlcG5n".into(), // fake base64 data
+                    },
+                },
+            ],
+            timestamp: Utc::now(),
+        }];
+
+        let messages = provider.format_messages(&transcript);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+
+        // Should use array-of-parts format for multimodal
+        let content = &messages[0]["content"];
+        assert!(content.is_array(), "content should be an array of parts");
+        let parts = content.as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+
+        // First part: text
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "What is in this image?");
+
+        // Second part: image_url with data URI
+        assert_eq!(parts[1]["type"], "image_url");
+        let url = parts[1]["image_url"]["url"].as_str().unwrap();
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "Expected data URI, got: {url}"
+        );
+        assert!(url.contains("aWtlcG5n"));
     }
 }

@@ -68,6 +68,14 @@ pub struct AgentDefaults {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxConfig>,
+
+    /// Default thinking budget tokens override. If set, takes priority over ThinkingLevel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget_tokens: Option<u32>,
+
+    /// Maximum spawn depth for multi-agent spawning (default: 3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_spawn_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,10 +143,22 @@ pub struct ChannelsConfig {
     pub slack: Option<SlackConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub whatsapp: Option<serde_json::Value>,
+    pub whatsapp: Option<WhatsAppConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signal: Option<serde_json::Value>,
+    pub signal: Option<SignalConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub googlechat: Option<GoogleChatConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub msteams: Option<MsTeamsConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<MatrixConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bluebubbles: Option<BlueBubblesConfig>,
 }
 
 /// Discord channel configuration.
@@ -203,6 +223,153 @@ impl TelegramConfig {
     /// Resolve the bot token: check `bot_token` first, then `bot_token_env` environment variable.
     pub fn resolve_bot_token(&self) -> Option<String> {
         resolve_secret_field(&self.bot_token, &self.bot_token_env)
+    }
+}
+
+/// WhatsApp Business Cloud API configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhatsAppConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_number_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_secret_env: Option<String>,
+    #[serde(default = "default_whatsapp_port")]
+    pub webhook_port: u16,
+}
+
+fn default_whatsapp_port() -> u16 {
+    3101
+}
+
+impl WhatsAppConfig {
+    pub fn resolve_access_token(&self) -> Option<String> {
+        resolve_secret_field(&self.access_token, &self.access_token_env)
+    }
+    pub fn resolve_app_secret(&self) -> Option<String> {
+        resolve_secret_field(&self.app_secret, &self.app_secret_env)
+    }
+}
+
+/// Signal channel configuration (signal-cli REST bridge).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalConfig {
+    /// signal-cli REST API URL (default: http://localhost:8080).
+    #[serde(default = "default_signal_api_url")]
+    pub api_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_number: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_number_env: Option<String>,
+    /// Poll interval in milliseconds (default: 2000).
+    #[serde(default = "default_signal_poll_interval")]
+    pub poll_interval_ms: u64,
+}
+
+fn default_signal_api_url() -> String {
+    "http://localhost:8080".into()
+}
+
+fn default_signal_poll_interval() -> u64 {
+    2000
+}
+
+impl SignalConfig {
+    pub fn resolve_phone_number(&self) -> Option<String> {
+        resolve_secret_field(&self.phone_number, &self.phone_number_env)
+    }
+}
+
+/// Google Chat (Workspace) channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleChatConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_account_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default = "default_googlechat_port")]
+    pub webhook_port: u16,
+}
+
+fn default_googlechat_port() -> u16 {
+    3102
+}
+
+/// Microsoft Teams (Bot Framework) channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MsTeamsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_password_env: Option<String>,
+    #[serde(default = "default_msteams_port")]
+    pub webhook_port: u16,
+}
+
+fn default_msteams_port() -> u16 {
+    3103
+}
+
+impl MsTeamsConfig {
+    pub fn resolve_app_password(&self) -> Option<String> {
+        resolve_secret_field(&self.app_password, &self.app_password_env)
+    }
+}
+
+/// Matrix channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatrixConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homeserver_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token_env: Option<String>,
+}
+
+impl MatrixConfig {
+    pub fn resolve_password(&self) -> Option<String> {
+        resolve_secret_field(&self.password, &self.password_env)
+    }
+    pub fn resolve_access_token(&self) -> Option<String> {
+        resolve_secret_field(&self.access_token, &self.access_token_env)
+    }
+}
+
+/// iMessage (BlueBubbles) channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueBubblesConfig {
+    /// BlueBubbles API URL (default: http://localhost:1234).
+    #[serde(default = "default_bluebubbles_api_url")]
+    pub api_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_env: Option<String>,
+}
+
+fn default_bluebubbles_api_url() -> String {
+    "http://localhost:1234".into()
+}
+
+impl BlueBubblesConfig {
+    pub fn resolve_password(&self) -> Option<String> {
+        resolve_secret_field(&self.password, &self.password_env)
     }
 }
 
@@ -496,7 +663,19 @@ fn default_browser_timeout() -> u64 {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SessionConfig {}
+pub struct SessionConfig {
+    /// Maximum context tokens before compaction triggers (default: 100,000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<usize>,
+
+    /// Automatically compact transcripts when they exceed the token limit.
+    #[serde(default)]
+    pub auto_compact: bool,
+
+    /// Number of recent transcript entries to keep during compaction (default: 10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_keep_recent: Option<usize>,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CronConfig {
@@ -518,7 +697,31 @@ pub struct CronJob {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LoggingConfig {}
+pub struct LoggingConfig {
+    /// Log format: "plain" (default) or "json".
+    #[serde(default = "default_log_format")]
+    pub format: String,
+
+    /// Log level override (trace/debug/info/warn/error).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+
+    /// Per-crate log level overrides (e.g. "rusty_claw_gateway=debug").
+    #[serde(default)]
+    pub filters: Vec<String>,
+
+    /// Output target: "stderr" (default) or "stdout".
+    #[serde(default = "default_log_output")]
+    pub output: String,
+}
+
+fn default_log_format() -> String {
+    "plain".into()
+}
+
+fn default_log_output() -> String {
+    "stderr".into()
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginsConfig {}
@@ -652,6 +855,31 @@ impl Config {
             .and_then(|d| d.temperature)
     }
 
+    /// Get max context tokens setting.
+    pub fn max_context_tokens(&self) -> usize {
+        self.session
+            .as_ref()
+            .and_then(|s| s.max_context_tokens)
+            .unwrap_or(100_000)
+    }
+
+    /// Get the number of recent entries to keep during compaction.
+    pub fn compact_keep_recent(&self) -> usize {
+        self.session
+            .as_ref()
+            .and_then(|s| s.compact_keep_recent)
+            .unwrap_or(10)
+    }
+
+    /// Get the max spawn depth for multi-agent spawning.
+    pub fn max_spawn_depth(&self) -> u32 {
+        self.agents
+            .as_ref()
+            .and_then(|a| a.defaults.as_ref())
+            .and_then(|d| d.max_spawn_depth)
+            .unwrap_or(3)
+    }
+
     /// Find a provider config by id.
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
         self.models
@@ -705,6 +933,57 @@ impl Config {
         *self = serde_json::from_value(json)
             .map_err(|e| anyhow::anyhow!("Config deserialization error: {e}"))?;
         Ok(())
+    }
+
+    /// Validate config, returning (warnings, errors).
+    pub fn validate(&self) -> (Vec<String>, Vec<String>) {
+        let mut warnings = Vec::new();
+        let mut errors = Vec::new();
+
+        // Check providers for API keys (skip ollama)
+        if let Some(providers) = self
+            .models
+            .as_ref()
+            .and_then(|m| m.providers.as_ref())
+        {
+            for p in providers {
+                if p.id != "ollama" && p.resolve_api_key().is_none() {
+                    warnings.push(format!(
+                        "Provider '{}' has no API key configured",
+                        p.id
+                    ));
+                }
+            }
+        }
+
+        // Check TLS cert/key paths exist
+        if let Some(tls) = self
+            .gateway
+            .as_ref()
+            .and_then(|g| g.tls.as_ref())
+        {
+            if !Path::new(&tls.cert_path).exists() {
+                errors.push(format!(
+                    "TLS certificate file not found: {}",
+                    tls.cert_path
+                ));
+            }
+            if !Path::new(&tls.key_path).exists() {
+                errors.push(format!(
+                    "TLS key file not found: {}",
+                    tls.key_path
+                ));
+            }
+        }
+
+        // Check port is non-zero
+        if let Some(gw) = &self.gateway {
+            if gw.port == 0 {
+                errors.push("Gateway port cannot be 0".to_string());
+            }
+        }
+
+        (warnings, errors)
     }
 
     /// Save config to a file.
@@ -788,5 +1067,102 @@ mod tests {
         };
         assert_eq!(tg.resolve_bot_token(), Some("bot-token-123".into()));
         unsafe { std::env::remove_var("TEST_RC_TG_TOKEN") };
+    }
+
+    // --- 6b-2: Structured Logging tests ---
+
+    #[test]
+    fn test_logging_config_defaults() {
+        // Deserialize an empty logging config to get the serde defaults
+        let json_str = r#"{ "logging": {} }"#;
+        let config: Config = json5::from_str(json_str).unwrap();
+        let logging = config.logging.expect("logging should be present");
+        assert_eq!(logging.format, "plain");
+        assert!(logging.level.is_none());
+        assert_eq!(logging.output, "stderr");
+        assert!(logging.filters.is_empty());
+    }
+
+    #[test]
+    fn test_logging_config_json_deser() {
+        let json_str = r#"{
+            "logging": {
+                "format": "json",
+                "level": "debug",
+                "output": "stdout"
+            }
+        }"#;
+        let config: Config = json5::from_str(json_str).unwrap();
+        let logging = config.logging.expect("logging should be present");
+        assert_eq!(logging.format, "json");
+        assert_eq!(logging.level.as_deref(), Some("debug"));
+        assert_eq!(logging.output, "stdout");
+    }
+
+    #[test]
+    fn test_logging_config_filters() {
+        let json_str = r#"{
+            "logging": {
+                "filters": [
+                    "rusty_claw_gateway=debug",
+                    "rusty_claw_agent=trace"
+                ]
+            }
+        }"#;
+        let config: Config = json5::from_str(json_str).unwrap();
+        let logging = config.logging.expect("logging should be present");
+        assert_eq!(logging.filters.len(), 2);
+        assert_eq!(logging.filters[0], "rusty_claw_gateway=debug");
+        assert_eq!(logging.filters[1], "rusty_claw_agent=trace");
+    }
+
+    // --- 6b-5: Config Validation tests ---
+
+    #[test]
+    fn test_validate_missing_api_key_warns() {
+        let config = Config {
+            models: Some(ModelsConfig {
+                providers: Some(vec![ProviderConfig {
+                    id: "anthropic".into(),
+                    api_key: None,
+                    api_key_env: None,
+                    base_url: None,
+                    default_model: None,
+                }]),
+            }),
+            ..Config::default()
+        };
+        let (warnings, _errors) = config.validate();
+        assert!(
+            warnings.iter().any(|w| w.contains("anthropic") && w.to_lowercase().contains("key")),
+            "Expected a warning about missing API key for anthropic, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_bad_tls_errors() {
+        let config = Config {
+            gateway: Some(GatewayConfig {
+                port: 18789,
+                bind: None,
+                auth: None,
+                tls: Some(TlsConfig {
+                    cert_path: "/nonexistent/path/cert.pem".into(),
+                    key_path: "/nonexistent/path/key.pem".into(),
+                }),
+                rate_limit: None,
+                tailscale: None,
+            }),
+            ..Config::default()
+        };
+        let (_warnings, errors) = config.validate();
+        assert!(
+            !errors.is_empty(),
+            "Expected errors for nonexistent TLS paths, got none"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("cert")),
+            "Expected an error about cert file, got: {errors:?}"
+        );
     }
 }

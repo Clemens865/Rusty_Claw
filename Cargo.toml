@@ -92,6 +92,10 @@ chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-
 # Interactive CLI prompts
 dialoguer = "0.11"
 
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
 # Benchmarking
 criterion = { version = "0.5", features = ["async_tokio"] }
 

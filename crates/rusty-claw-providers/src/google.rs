@@ -148,6 +148,24 @@ impl LlmProvider for GeminiProvider {
                         .iter()
                         .filter_map(|b| match b {
                             ContentBlock::Text { text } => Some(json!({ "text": text })),
+                            ContentBlock::Image { source } => {
+                                if source.source_type == "base64" {
+                                    Some(json!({
+                                        "inline_data": {
+                                            "mime_type": source.media_type,
+                                            "data": source.data,
+                                        }
+                                    }))
+                                } else {
+                                    // URL-based images: use fileData
+                                    Some(json!({
+                                        "file_data": {
+                                            "mime_type": source.media_type,
+                                            "file_uri": source.data,
+                                        }
+                                    }))
+                                }
+                            }
                             _ => None,
                         })
                         .collect();
@@ -551,5 +569,51 @@ mod tests {
             .unwrap();
         assert_eq!(fc.name, "exec");
         assert_eq!(fc.args.as_ref().unwrap()["command"], "ls");
+    }
+
+    // --- 6c-2: Image Input test ---
+
+    #[test]
+    fn test_format_messages_with_image() {
+        use chrono::Utc;
+        use rusty_claw_core::types::ImageSource;
+
+        let provider = GeminiProvider::new(None);
+        let transcript = vec![TranscriptEntry::User {
+            content: vec![
+                ContentBlock::Text {
+                    text: "Describe this image".into(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: "image/jpeg".into(),
+                        data: "ZmFrZWpwZWc=".into(), // fake base64 data
+                    },
+                },
+            ],
+            timestamp: Utc::now(),
+        }];
+
+        let messages = provider.format_messages(&transcript);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+
+        let parts = &messages[0]["parts"];
+        assert!(parts.is_array(), "parts should be an array");
+        let parts = parts.as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+
+        // First part: text
+        assert_eq!(parts[0]["text"], "Describe this image");
+
+        // Second part: inline_data format for base64 images
+        let inline_data = &parts[1]["inline_data"];
+        assert!(
+            inline_data.is_object(),
+            "Expected inline_data object for base64 image, got: {parts:?}"
+        );
+        assert_eq!(inline_data["mime_type"], "image/jpeg");
+        assert_eq!(inline_data["data"], "ZmFrZWpwZWc=");
     }
 }

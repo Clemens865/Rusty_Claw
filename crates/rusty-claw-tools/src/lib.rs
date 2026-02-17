@@ -12,10 +12,12 @@ use serde::{Deserialize, Serialize};
 use rusty_claw_browser::BrowserPool;
 use rusty_claw_core::config::Config;
 
+pub mod agents_spawn;
 pub mod browser;
 pub mod canvas;
 pub mod edit_file;
 pub mod exec;
+pub mod file_list;
 pub mod image_generation;
 pub mod memory;
 pub mod path_guard;
@@ -152,4 +154,10 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
 
     // Canvas tool
     registry.register(Box::new(canvas::CanvasTool));
+
+    // File listing tool
+    registry.register(Box::new(file_list::FileListTool));
+
+    // Agent spawning tool
+    registry.register(Box::new(agents_spawn::AgentsSpawnTool));
 }

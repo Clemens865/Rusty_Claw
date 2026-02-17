@@ -9,6 +9,10 @@ pub mod api;
 pub mod hooks;
 pub mod logging_plugin;
 pub mod manager;
+#[cfg(feature = "wasm")]
+pub mod wasm_adapter;
+#[cfg(feature = "wasm")]
+pub mod wasm_runtime;
 
 pub use hooks::{HookContext, HookHandler, HookRegistry, HookResult};
 pub use manager::{PluginManager, PluginRegistrations};
@@ -40,6 +44,18 @@ pub enum HookEvent {
 /// Passed to plugins during registration so they can register their
 /// extensions with the runtime.
 pub use api::PluginApi;
+
+/// Where a plugin was loaded from.
+#[derive(Debug, Clone)]
+pub enum PluginSource {
+    /// Built-in native Rust plugin.
+    Native,
+    /// Loaded from a WASM file.
+    #[cfg(feature = "wasm")]
+    Wasm {
+        path: std::path::PathBuf,
+    },
+}
 
 /// The core plugin trait.
 #[async_trait]

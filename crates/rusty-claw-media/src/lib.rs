@@ -1,8 +1,6 @@
-//! Media pipeline — images, audio, video processing.
+//! Media pipeline — audio processing, VAD, STT, TTS streaming.
 
-// TODO: Phase 2
-// - Image detection and resizing
-// - Audio transcription (Whisper via Groq)
-// - Video thumbnail extraction
-// - MIME type detection
-// - Temp file lifecycle management
+pub mod stt;
+pub mod tts_stream;
+pub mod vad;
+pub mod voice_session;

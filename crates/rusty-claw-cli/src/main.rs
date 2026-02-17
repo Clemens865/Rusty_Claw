@@ -155,14 +155,8 @@ enum PairingAction {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let filter = if cli.verbose { "debug" } else { "info" };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter)),
-        )
-        .init();
+    // Initialize logging (deferred until config is loaded below)
+    let verbose = cli.verbose;
 
     // Load config
     let config_path = cli
@@ -172,8 +166,26 @@ async fn main() -> anyhow::Result<()> {
 
     let config = rusty_claw_core::config::Config::load(&config_path)?;
 
+    // Initialize logging from config
+    init_logging(&config, verbose);
+
     match cli.command {
         Commands::Gateway { port, ui } => {
+            // Validate config
+            let (warnings, errors) = config.validate();
+            for w in &warnings {
+                tracing::warn!("Config: {w}");
+            }
+            if !errors.is_empty() {
+                for e in &errors {
+                    tracing::error!("Config: {e}");
+                }
+                anyhow::bail!(
+                    "Configuration has {} error(s), aborting. Fix the config and retry.",
+                    errors.len()
+                );
+            }
+
             let port = port.unwrap_or_else(|| config.gateway_port());
             tracing::info!("Starting Rusty Claw gateway on port {port}");
             if ui {
@@ -194,6 +206,38 @@ async fn main() -> anyhow::Result<()> {
             // Initialize plugin system
             let mut plugin_manager = rusty_claw_plugins::PluginManager::new();
             // plugin_manager.add_plugin(Box::new(rusty_claw_plugins::logging_plugin::LoggingPlugin))?;
+
+            // Load WASM plugins from workspace/plugins/ directory
+            #[cfg(feature = "wasm")]
+            {
+                let plugins_dir = config.workspace_dir().join("plugins");
+                if plugins_dir.exists() {
+                    match rusty_claw_plugins::wasm_runtime::WasmPluginLoader::new() {
+                        Ok(loader) => {
+                            if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+                                for entry in entries.flatten() {
+                                    let path = entry.path();
+                                    if path.extension().is_some_and(|ext| ext == "wasm") {
+                                        match plugin_manager.add_wasm_plugin(&path, &loader) {
+                                            Ok(()) => tracing::info!(
+                                                path = %path.display(),
+                                                "Loaded WASM plugin"
+                                            ),
+                                            Err(e) => tracing::warn!(
+                                                path = %path.display(),
+                                                %e,
+                                                "Failed to load WASM plugin"
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!(%e, "Failed to create WASM plugin loader"),
+                    }
+                }
+            }
+
             let plugin_regs = plugin_manager.initialize().await?;
             for tool in plugin_regs.tools {
                 tools.register(tool);
@@ -1054,6 +1098,128 @@ fn create_channel_registry(
         }
     }
 
+    // Register WhatsApp if configured
+    if let Some(wa_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.whatsapp.as_ref())
+    {
+        if let Some(token) = wa_config.resolve_access_token() {
+            let phone_number_id = wa_config.phone_number_id.clone().unwrap_or_default();
+            let channel = rusty_claw_channels::whatsapp::WhatsAppChannel::new(
+                rusty_claw_channels::whatsapp::WhatsAppChannelConfig {
+                    phone_number_id,
+                    access_token: token,
+                    verify_token: wa_config.verify_token.clone(),
+                    app_secret: wa_config.resolve_app_secret(),
+                    webhook_port: wa_config.webhook_port,
+                },
+            );
+            registry.register(Box::new(channel));
+            tracing::info!("WhatsApp channel registered");
+        } else {
+            tracing::warn!("WhatsApp configured but no access token found");
+        }
+    }
+
+    // Register Signal if configured
+    if let Some(sig_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.signal.as_ref())
+    {
+        if let Some(phone) = sig_config.resolve_phone_number() {
+            let channel = rusty_claw_channels::signal::SignalChannel::new(
+                sig_config.api_url.clone(),
+                phone,
+                sig_config.poll_interval_ms,
+            );
+            registry.register(Box::new(channel));
+            tracing::info!("Signal channel registered");
+        } else {
+            tracing::warn!("Signal configured but no phone number found");
+        }
+    }
+
+    // Register Google Chat if configured
+    if let Some(gc_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.googlechat.as_ref())
+    {
+        let project_id = gc_config.project_id.clone().unwrap_or_default();
+        let channel = rusty_claw_channels::googlechat::GoogleChatChannel::new(
+            project_id,
+            gc_config.service_account_json.clone(),
+            gc_config.webhook_port,
+        );
+        registry.register(Box::new(channel));
+        tracing::info!("Google Chat channel registered");
+    }
+
+    // Register MS Teams if configured
+    if let Some(teams_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.msteams.as_ref())
+    {
+        if let Some(password) = teams_config.resolve_app_password() {
+            let app_id = teams_config.app_id.clone().unwrap_or_default();
+            let channel = rusty_claw_channels::msteams::MsTeamsChannel::new(
+                app_id,
+                password,
+                teams_config.webhook_port,
+            );
+            registry.register(Box::new(channel));
+            tracing::info!("MS Teams channel registered");
+        } else {
+            tracing::warn!("MS Teams configured but no app password found");
+        }
+    }
+
+    // Register Matrix if configured
+    if let Some(mx_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.matrix.as_ref())
+    {
+        let token = mx_config.resolve_access_token().or_else(|| {
+            mx_config.resolve_password()
+        });
+        if let Some(token) = token {
+            let homeserver = mx_config
+                .homeserver_url
+                .clone()
+                .unwrap_or_else(|| "https://matrix.org".into());
+            let user_id = mx_config.username.clone();
+            let channel = rusty_claw_channels::matrix::MatrixChannel::new(
+                homeserver, token, user_id,
+            );
+            registry.register(Box::new(channel));
+            tracing::info!("Matrix channel registered");
+        } else {
+            tracing::warn!("Matrix configured but no access token or password found");
+        }
+    }
+
+    // Register BlueBubbles (iMessage) if configured
+    if let Some(bb_config) = config
+        .channels
+        .as_ref()
+        .and_then(|c| c.bluebubbles.as_ref())
+    {
+        if let Some(password) = bb_config.resolve_password() {
+            let channel = rusty_claw_channels::bluebubbles::BlueBubblesChannel::new(
+                bb_config.api_url.clone(),
+                password,
+            );
+            registry.register(Box::new(channel));
+            tracing::info!("BlueBubbles (iMessage) channel registered");
+        } else {
+            tracing::warn!("BlueBubbles configured but no password found");
+        }
+    }
+
     // Register WebChat (always available)
     {
         let (webchat, _inbound_tx) = rusty_claw_channels::webchat::WebChatChannel::new();
@@ -1062,6 +1228,45 @@ fn create_channel_registry(
     }
 
     registry
+}
+
+/// Initialize tracing subscriber from config and verbose flag.
+fn init_logging(config: &rusty_claw_core::config::Config, verbose: bool) {
+    let logging = config.logging.as_ref();
+    let level = if verbose {
+        "debug"
+    } else {
+        logging
+            .and_then(|l| l.level.as_deref())
+            .unwrap_or("info")
+    };
+
+    // Build filter: base level + per-crate overrides
+    let mut filter_str = level.to_string();
+    if let Some(log_cfg) = logging {
+        for f in &log_cfg.filters {
+            filter_str.push(',');
+            filter_str.push_str(f);
+        }
+    }
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter_str));
+
+    let is_json = logging
+        .map(|l| l.format == "json")
+        .unwrap_or(false);
+
+    if is_json {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 }
 
 /// Start all registered channels and set up message routing.

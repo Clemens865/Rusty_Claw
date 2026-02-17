@@ -64,6 +64,9 @@ pub struct CompletionRequest {
     pub temperature: Option<f64>,
     pub tools: Option<Vec<serde_json::Value>>,
     pub system: Option<String>,
+    /// Budget for thinking/reasoning tokens (Anthropic extended thinking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget_tokens: Option<u32>,
 }
 
 /// A streamed chunk from the LLM.

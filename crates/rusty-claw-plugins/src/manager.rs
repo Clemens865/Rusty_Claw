@@ -65,6 +65,20 @@ impl PluginManager {
     pub fn hooks(&self) -> Arc<HookRegistry> {
         self.hooks.clone()
     }
+
+    /// Load and add a WASM plugin from a file path.
+    #[cfg(feature = "wasm")]
+    pub fn add_wasm_plugin(
+        &mut self,
+        path: &std::path::Path,
+        loader: &crate::wasm_runtime::WasmPluginLoader,
+    ) -> anyhow::Result<()> {
+        let module = loader.load_module(path)?;
+        let id = format!("wasm:{}", module.name);
+        let name = module.name.clone();
+        let adapter = crate::wasm_adapter::WasmPluginAdapter::new(id, name, module);
+        self.add_plugin(Box::new(adapter))
+    }
 }
 
 impl Default for PluginManager {

@@ -42,6 +42,9 @@ pub struct SessionMeta {
     /// Currently active skill (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_skill: Option<String>,
+    /// Custom system prompt override for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_system_prompt: Option<String>,
 }
 
 /// A single entry in the JSONL transcript file.
@@ -123,6 +126,7 @@ impl Session {
             spawned_by: None,
             spawn_depth: 0,
             active_skill: None,
+            custom_system_prompt: None,
         };
         Self {
             meta,

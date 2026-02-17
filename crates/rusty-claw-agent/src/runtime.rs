@@ -12,12 +12,12 @@ use tracing::{debug, error, info, warn};
 
 use rusty_claw_core::config::Config;
 use rusty_claw_core::session::{Session, TranscriptEntry, Usage};
-use rusty_claw_core::types::{ContentBlock, InboundMessage};
+use rusty_claw_core::types::{ContentBlock, ImageSource, InboundMessage, ThinkingLevel};
 use rusty_claw_plugins::{HookContext, HookEvent, HookRegistry};
 use rusty_claw_providers::{CompletionRequest, Credentials, LlmProvider, ToolDefinition};
 use rusty_claw_tools::{ToolContext, ToolRegistry};
 
-use crate::prompt::build_system_prompt;
+use crate::prompt::build_system_prompt_with_persona;
 use crate::{AgentEvent, AgentErrorKind, AgentPayload, AgentRunError, AgentRunMeta, AgentRunResult};
 
 /// Build a [`HookContext`] for the current session.
@@ -47,15 +47,47 @@ pub async fn run_agent(
 
     // 1. Build system prompt (no active skills in this code path — gateway can set per-session)
     let active_skills: Vec<&rusty_claw_core::skills::SkillDefinition> = Vec::new();
-    let system_prompt = build_system_prompt(config, tools, &workspace, &active_skills);
+    let system_prompt = build_system_prompt_with_persona(
+        config,
+        tools,
+        &workspace,
+        &active_skills,
+        session.meta.custom_system_prompt.as_deref(),
+    );
 
     // 2. Append user message to transcript
-    let user_content = match &message.text {
+    let mut user_content: Vec<ContentBlock> = match &message.text {
         Some(text) => vec![ContentBlock::Text { text: text.clone() }],
         None => vec![ContentBlock::Text {
             text: "(empty message)".into(),
         }],
     };
+
+    // Convert media attachments to Image content blocks
+    for media in &message.media {
+        if media.mime_type.starts_with("image/") {
+            if let Some(ref data) = media.data {
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+                user_content.push(ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: media.mime_type.clone(),
+                        data: b64,
+                    },
+                });
+            } else if let Some(ref url) = media.url {
+                user_content.push(ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "url".into(),
+                        media_type: media.mime_type.clone(),
+                        data: url.clone(),
+                    },
+                });
+            }
+        }
+    }
+
     session.append(TranscriptEntry::User {
         content: user_content,
         timestamp: Utc::now(),
@@ -78,6 +110,25 @@ pub async fn run_agent(
     let mut tool_call_count: u32 = 0;
     let mut final_text = String::new();
 
+    // Auto-compact if enabled and transcript exceeds limit
+    if config
+        .session
+        .as_ref()
+        .is_some_and(|s| s.auto_compact)
+    {
+        match crate::compaction::compact_transcript(session, config, provider, credentials, hooks)
+            .await
+        {
+            Ok(true) => {
+                info!("Auto-compaction performed before agent run");
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!(%e, "Auto-compaction failed, continuing anyway");
+            }
+        }
+    }
+
     // 3. Tool loop
     for iteration in 0..max_iterations {
         debug!(iteration, "Agent loop iteration");
@@ -99,6 +150,21 @@ pub async fn run_agent(
             Some(provider.format_tools(&definitions))
         };
 
+        // Map thinking level to budget tokens
+        let thinking_budget = config
+            .agents
+            .as_ref()
+            .and_then(|a| a.defaults.as_ref())
+            .and_then(|d| d.thinking_budget_tokens)
+            .or(match session.meta.thinking_level {
+                ThinkingLevel::Off => None,
+                ThinkingLevel::Minimal => Some(1024),
+                ThinkingLevel::Low => Some(2048),
+                ThinkingLevel::Medium => Some(4096),
+                ThinkingLevel::High => Some(8192),
+                ThinkingLevel::XHigh => Some(16384),
+            });
+
         let request = CompletionRequest {
             model: session
                 .meta
@@ -110,6 +176,7 @@ pub async fn run_agent(
             temperature: config.temperature(),
             tools: tool_defs,
             system: Some(system_prompt.clone()),
+            thinking_budget_tokens: thinking_budget,
         };
 
         // --- Hook: LlmInput ---

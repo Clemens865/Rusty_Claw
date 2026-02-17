@@ -303,3 +303,56 @@ async fn test_ws_agent_status() {
 
     ws.close(None).await.ok();
 }
+
+#[tokio::test]
+async fn test_health_endpoint_structure() {
+    let (_state, port) = start_test_gateway().await;
+
+    let resp = reqwest::get(format!("http://127.0.0.1:{port}/health"))
+        .await
+        .expect("Health request failed");
+
+    assert!(resp.status().is_success());
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    // Verify the JSON response contains the expected top-level fields
+    assert!(
+        body.get("uptime_seconds").is_some(),
+        "Missing 'uptime_seconds' field in health response: {body}"
+    );
+    assert!(
+        body["uptime_seconds"].is_number(),
+        "'uptime_seconds' should be a number"
+    );
+
+    assert!(
+        body.get("active_agents").is_some(),
+        "Missing 'active_agents' field in health response: {body}"
+    );
+    assert!(
+        body["active_agents"].is_number(),
+        "'active_agents' should be a number"
+    );
+
+    assert!(
+        body.get("providers").is_some(),
+        "Missing 'providers' field in health response: {body}"
+    );
+    assert!(
+        body["providers"].is_array(),
+        "'providers' should be an array"
+    );
+
+    assert!(
+        body.get("channels").is_some(),
+        "Missing 'channels' field in health response: {body}"
+    );
+    assert!(
+        body["channels"].is_array(),
+        "'channels' should be an array"
+    );
+
+    // Also verify status and version are present
+    assert_eq!(body["status"], "ok");
+    assert!(body["version"].is_string());
+}

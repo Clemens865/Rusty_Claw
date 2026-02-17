@@ -46,6 +46,7 @@ async fn verify_simple_completion(
         temperature: Some(0.0),
         tools: None,
         system: Some("You are a helpful assistant. Follow instructions exactly.".into()),
+        thinking_budget_tokens: None,
     };
 
     let stream = provider.stream(&request, credentials).await;

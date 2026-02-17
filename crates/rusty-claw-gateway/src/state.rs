@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -40,6 +41,9 @@ pub struct GatewayState {
     pub connections: RwLock<HashMap<String, ConnectionState>>,
     pub state_version: AtomicU64,
     pub health_version: AtomicU64,
+    pub startup_time: Instant,
+    #[cfg(feature = "metrics")]
+    pub prometheus_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
 }
 
 /// Per-connection state.
@@ -47,6 +51,10 @@ pub struct ConnectionState {
     pub conn_id: String,
     pub event_tx: mpsc::UnboundedSender<String>,
     pub authenticated: bool,
+    /// Voice session handle (if active).
+    pub voice_session: Option<rusty_claw_media::voice_session::VoiceSessionHandle>,
+    /// Sender for binary audio frames back to the client.
+    pub binary_event_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl GatewayState {
@@ -91,6 +99,9 @@ impl GatewayState {
             connections: RwLock::new(HashMap::new()),
             state_version: AtomicU64::new(1),
             health_version: AtomicU64::new(1),
+            startup_time: Instant::now(),
+            #[cfg(feature = "metrics")]
+            prometheus_handle: None,
         }
     }
 

@@ -11,6 +11,9 @@ rust-version.workspace = true
 name = "rusty-claw"
 path = "src/main.rs"
 
+[features]
+wasm = ["rusty-claw-plugins/wasm"]
+
 [dependencies]
 rusty-claw-core.workspace = true
 rusty-claw-gateway.workspace = true

@@ -51,6 +51,8 @@ struct AnthropicRequest {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,14 +219,22 @@ impl LlmProvider for AnthropicProvider {
             _ => anyhow::bail!("Anthropic requires ApiKey credentials"),
         };
 
+        let thinking = request.thinking_budget_tokens.map(|budget| {
+            serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            })
+        });
+
         let body = AnthropicRequest {
             model: request.model.clone(),
             max_tokens: request.max_tokens,
             system: request.system.clone(),
             messages: request.messages.clone(),
             stream: true,
-            temperature: request.temperature,
+            temperature: if thinking.is_some() { None } else { request.temperature },
             tools: request.tools.clone(),
+            thinking,
         };
 
         debug!(model = %body.model, "Streaming Anthropic Messages API");
@@ -632,5 +642,62 @@ mod tests {
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["content"][0]["text"], "Hi there");
+    }
+
+    // --- 6c-1: Thinking Token Pass-through tests ---
+
+    #[test]
+    fn test_anthropic_request_with_thinking() {
+        // When thinking_budget_tokens is Some, the AnthropicRequest should include
+        // a thinking field with type "enabled" and budget_tokens set.
+        let thinking = Some(4096u32).map(|budget| {
+            serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            })
+        });
+
+        let body = AnthropicRequest {
+            model: "claude-sonnet-4-20250514".into(),
+            max_tokens: 4096,
+            system: Some("You are helpful.".into()),
+            messages: vec![],
+            stream: true,
+            temperature: None, // temperature is None when thinking is enabled
+            tools: None,
+            thinking,
+        };
+
+        let serialized = serde_json::to_value(&body).unwrap();
+        assert!(serialized.get("thinking").is_some(), "thinking field should be present");
+        assert_eq!(serialized["thinking"]["type"], "enabled");
+        assert_eq!(serialized["thinking"]["budget_tokens"], 4096);
+        // Temperature should be None when thinking is enabled
+        assert!(serialized.get("temperature").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_request_without_thinking() {
+        // When thinking_budget_tokens is None, the thinking field should be absent.
+        let thinking: Option<serde_json::Value> = None;
+
+        let body = AnthropicRequest {
+            model: "claude-sonnet-4-20250514".into(),
+            max_tokens: 4096,
+            system: Some("You are helpful.".into()),
+            messages: vec![],
+            stream: true,
+            temperature: Some(0.7),
+            tools: None,
+            thinking,
+        };
+
+        let serialized = serde_json::to_value(&body).unwrap();
+        assert!(
+            serialized.get("thinking").is_none(),
+            "thinking field should NOT be present when budget is None"
+        );
+        // Temperature should be present when thinking is disabled
+        assert_eq!(serialized["temperature"], 0.7);
     }
 }

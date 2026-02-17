@@ -10,6 +10,8 @@ pub mod connection;
 pub mod cron;
 pub mod events;
 pub mod hot_reload;
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod methods;
 pub mod nodes;
 pub mod rate_limit;

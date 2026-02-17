@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod compaction;
 pub mod prompt;
 pub mod runtime;
 pub mod transcript;
@@ -48,6 +49,14 @@ pub enum AgentEvent {
     Usage {
         input_tokens: u64,
         output_tokens: u64,
+    },
+
+    /// Audio data for voice pipeline (base64-encoded).
+    #[serde(rename = "audio_delta")]
+    AudioDelta {
+        data: String,
+        format: String,
+        is_final: bool,
     },
 
     /// An error occurred during the run.

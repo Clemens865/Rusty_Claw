@@ -21,6 +21,24 @@ pub mod slack;
 #[cfg(feature = "webchat")]
 pub mod webchat;
 
+#[cfg(feature = "whatsapp")]
+pub mod whatsapp;
+
+#[cfg(feature = "signal")]
+pub mod signal;
+
+#[cfg(feature = "googlechat")]
+pub mod googlechat;
+
+#[cfg(feature = "msteams")]
+pub mod msteams;
+
+#[cfg(feature = "matrix")]
+pub mod matrix;
+
+#[cfg(feature = "bluebubbles")]
+pub mod bluebubbles;
+
 /// Channel metadata for UI display and discovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelMeta {

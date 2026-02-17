@@ -11,6 +11,7 @@ use rusty_claw_core::protocol::{ErrorShape, GatewayFrame};
 use rusty_claw_core::session::{Session, SessionKey};
 use rusty_claw_core::types::{ChatType, InboundMessage};
 use rusty_claw_agent::AgentEvent;
+use rusty_claw_media::voice_session::{TalkMode, VoiceSession};
 
 use crate::events::broadcast_event;
 use crate::state::GatewayState;
@@ -24,6 +25,23 @@ pub async fn dispatch_method(
 ) -> GatewayFrame {
     debug!(method, "Dispatching method");
 
+    #[cfg(feature = "metrics")]
+    let start = std::time::Instant::now();
+
+    let response = dispatch_method_inner(state, request_id, method, params).await;
+
+    #[cfg(feature = "metrics")]
+    crate::metrics::record_request(method, start.elapsed().as_secs_f64());
+
+    response
+}
+
+async fn dispatch_method_inner(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
     match method {
         "sessions.list" => handle_sessions_list(state, request_id).await,
         "sessions.preview" => handle_sessions_preview(state, request_id, params).await,
@@ -45,13 +63,18 @@ pub async fn dispatch_method(
         "cron.remove" => handle_cron_remove(state, request_id, params).await,
         "skills.list" => handle_skills_list(state, request_id).await,
         "skills.get" => handle_skills_get(state, request_id, params).await,
+        "sessions.compact" => handle_sessions_compact(state, request_id, params).await,
         "talk.config" => handle_talk_config(state, request_id, params).await,
+        "talk.start" => handle_talk_start(state, request_id, params).await,
+        "talk.stop" => handle_talk_stop(state, request_id, params).await,
+        "talk.mode" => handle_talk_mode(state, request_id, params).await,
         "node.pair.request" => {
             crate::nodes::handle_pair_request(&state.pairing, request_id, params)
         }
         "node.pair.approve" => {
             crate::nodes::handle_pair_approve(&state.pairing, request_id, params)
         }
+        "agents.spawn" => handle_agents_spawn(state, request_id, params).await,
         "node.invoke" => crate::nodes::handle_invoke(request_id, params),
         "node.event" => crate::nodes::handle_event(request_id, params),
         _ => error_response(
@@ -174,6 +197,13 @@ async fn handle_sessions_patch(
                     session.meta.thinking_level = level;
                 }
             }
+            if let Some(prompt) = params.get("custom_system_prompt") {
+                if prompt.is_null() {
+                    session.meta.custom_system_prompt = None;
+                } else if let Some(s) = prompt.as_str() {
+                    session.meta.custom_system_prompt = Some(s.to_string());
+                }
+            }
 
             match state.sessions.save(&session).await {
                 Ok(()) => {
@@ -185,6 +215,62 @@ async fn handle_sessions_patch(
         }
         Ok(None) => error_response(request_id, "not_found", "Session not found"),
         Err(e) => error_response(request_id, "session_error", &e.to_string()),
+    }
+}
+
+async fn handle_sessions_compact(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let key: SessionKey =
+        match serde_json::from_value(params.get("key").cloned().unwrap_or_default()) {
+            Ok(k) => k,
+            Err(e) => return error_response(request_id, "invalid_params", &e.to_string()),
+        };
+
+    let mut session = match state.sessions.load(&key).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return error_response(request_id, "not_found", "Session not found"),
+        Err(e) => return error_response(request_id, "session_error", &e.to_string()),
+    };
+
+    let (provider, credentials) = match state.providers.default() {
+        Some(pc) => pc,
+        None => {
+            return error_response(request_id, "no_provider", "No default provider configured")
+        }
+    };
+
+    let config = Arc::new(state.read_config().await);
+
+    match rusty_claw_agent::compaction::compact_transcript(
+        &mut session,
+        &config,
+        provider,
+        credentials,
+        &state.hooks,
+    )
+    .await
+    {
+        Ok(true) => {
+            if let Err(e) = state.sessions.save(&session).await {
+                return error_response(request_id, "session_error", &e.to_string());
+            }
+            state.bump_state_version();
+            let new_tokens =
+                rusty_claw_agent::transcript::estimate_transcript_tokens(&session.transcript);
+            ok_response(
+                request_id,
+                json!({"compacted": true, "new_token_estimate": new_tokens}),
+            )
+        }
+        Ok(false) => ok_response(
+            request_id,
+            json!({"compacted": false, "reason": "under_limit"}),
+        ),
+        Err(e) => error_response(request_id, "compaction_error", &e.to_string()),
     }
 }
 
@@ -654,6 +740,279 @@ async fn handle_talk_config(
         }
         _ => error_response(request_id, "invalid_params", "action must be 'get'"),
     }
+}
+
+// ============================================================
+// Talk methods (voice pipeline)
+// ============================================================
+
+async fn handle_talk_start(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let conn_id = params
+        .get("conn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if conn_id.is_empty() {
+        return error_response(request_id, "invalid_params", "conn_id is required");
+    }
+
+    let mode_str = params
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("vad");
+
+    let mode = match mode_str {
+        "push" => TalkMode::Push,
+        _ => TalkMode::Vad,
+    };
+
+    // Check if there's already an active voice session
+    {
+        let connections = state.connections.read().await;
+        if let Some(conn) = connections.get(conn_id) {
+            if conn.voice_session.is_some() {
+                return error_response(
+                    request_id,
+                    "already_active",
+                    "Voice session already active",
+                );
+            }
+        } else {
+            return error_response(request_id, "not_found", "Connection not found");
+        }
+    }
+
+    let (handle, mut utterance_rx) = VoiceSession::start(mode);
+
+    // Store voice session handle in connection state
+    {
+        let mut connections = state.connections.write().await;
+        if let Some(conn) = connections.get_mut(conn_id) {
+            conn.voice_session = Some(handle);
+        }
+    }
+
+    // Spawn utterance processing task
+    let state_clone = state.clone();
+    let conn_id_owned = conn_id.to_string();
+    tokio::spawn(async move {
+        while let Some(utterance) = utterance_rx.recv().await {
+            debug!(
+                duration_ms = utterance.duration_ms,
+                samples = utterance.pcm_data.len(),
+                "Utterance received"
+            );
+
+            // Get transcription config
+            let config = state_clone.read_config().await;
+            let transcription_config = config
+                .tools
+                .as_ref()
+                .and_then(|t| t.transcription.as_ref());
+
+            if let Some(tc) = transcription_config {
+                match rusty_claw_media::stt::transcribe_audio_bytes(&utterance.pcm_data, tc).await {
+                    Ok(text) if !text.is_empty() => {
+                        info!(text = %text, "Transcribed utterance");
+
+                        // Send transcription as agent event
+                        let event = AgentEvent::BlockReply {
+                            text: format!("[Voice] {text}"),
+                            is_final: true,
+                        };
+                        if let Ok(payload) = serde_json::to_value(&event) {
+                            broadcast_event(&state_clone, "agent.event", Some(payload)).await;
+                        }
+                    }
+                    Ok(_) => {
+                        debug!("Empty transcription result");
+                    }
+                    Err(e) => {
+                        warn!(%e, "Transcription failed");
+                    }
+                }
+            } else {
+                warn!("No transcription config, cannot process voice");
+            }
+        }
+
+        // Cleanup voice session on task end
+        let mut connections = state_clone.connections.write().await;
+        if let Some(conn) = connections.get_mut(&conn_id_owned) {
+            conn.voice_session = None;
+        }
+    });
+
+    ok_response(
+        request_id,
+        json!({"started": true, "mode": mode_str, "conn_id": conn_id}),
+    )
+}
+
+async fn handle_talk_stop(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let conn_id = params
+        .get("conn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if conn_id.is_empty() {
+        return error_response(request_id, "invalid_params", "conn_id is required");
+    }
+
+    let mut connections = state.connections.write().await;
+    if let Some(conn) = connections.get_mut(conn_id) {
+        if let Some(handle) = conn.voice_session.take() {
+            handle.cancel.cancel();
+            ok_response(request_id, json!({"stopped": true, "conn_id": conn_id}))
+        } else {
+            error_response(request_id, "not_active", "No voice session active")
+        }
+    } else {
+        error_response(request_id, "not_found", "Connection not found")
+    }
+}
+
+async fn handle_talk_mode(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let conn_id = params
+        .get("conn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mode_str = params
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if conn_id.is_empty() || mode_str.is_empty() {
+        return error_response(request_id, "invalid_params", "conn_id and mode are required");
+    }
+
+    let mode = match mode_str {
+        "push" => TalkMode::Push,
+        "vad" => TalkMode::Vad,
+        _ => return error_response(request_id, "invalid_params", "mode must be 'push' or 'vad'"),
+    };
+
+    let mut connections = state.connections.write().await;
+    if let Some(conn) = connections.get_mut(conn_id) {
+        if let Some(ref mut handle) = conn.voice_session {
+            handle.mode = mode;
+            ok_response(request_id, json!({"mode": mode_str, "conn_id": conn_id}))
+        } else {
+            error_response(request_id, "not_active", "No voice session active")
+        }
+    } else {
+        error_response(request_id, "not_found", "Connection not found")
+    }
+}
+
+// ============================================================
+// Agent spawning
+// ============================================================
+
+async fn handle_agents_spawn(
+    state: &Arc<GatewayState>,
+    request_id: &str,
+    params: Option<serde_json::Value>,
+) -> GatewayFrame {
+    let params = params.unwrap_or_default();
+    let task = match params.get("task").and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => return error_response(request_id, "invalid_params", "task is required"),
+    };
+    let model = params.get("model").and_then(|v| v.as_str()).map(String::from);
+
+    // Check spawn depth
+    let parent_depth = params
+        .get("spawn_depth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    let config = state.read_config().await;
+    let max_depth = config.max_spawn_depth();
+
+    if parent_depth >= max_depth {
+        return error_response(
+            request_id,
+            "spawn_depth_exceeded",
+            &format!("Max spawn depth of {max_depth} exceeded"),
+        );
+    }
+
+    // Create child session
+    let child_key = SessionKey {
+        channel: "spawned".into(),
+        account_id: "agent".into(),
+        chat_type: ChatType::Dm,
+        peer_id: format!("spawn-{}", uuid::Uuid::new_v4()),
+        scope: rusty_claw_core::session::SessionScope::PerSender,
+    };
+    let child_hash = child_key.hash_key();
+
+    let mut child_session = Session::new(child_key);
+    child_session.meta.spawned_by = Some("parent".to_string());
+    child_session.meta.spawn_depth = parent_depth + 1;
+    if let Some(ref m) = model {
+        child_session.meta.model = Some(m.clone());
+    }
+
+    // Save child session
+    if let Err(e) = state.sessions.save(&child_session).await {
+        return error_response(request_id, "session_error", &e.to_string());
+    }
+
+    // Spawn agent task for the child
+    let state_clone = state.clone();
+    let task_clone = task.clone();
+    tokio::spawn(async move {
+        let message = InboundMessage::from_cli_text(&task_clone);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let (provider, credentials) = match state_clone.providers.default() {
+            Some(pc) => pc,
+            None => {
+                warn!("No provider for spawned agent");
+                return;
+            }
+        };
+
+        let config = Arc::new(state_clone.read_config().await);
+        let _ = rusty_claw_agent::run_agent(
+            &mut child_session,
+            message,
+            &config,
+            &state_clone.tools,
+            provider,
+            credentials,
+            event_tx,
+            &state_clone.hooks,
+        )
+        .await;
+
+        if let Err(e) = state_clone.sessions.save(&child_session).await {
+            warn!(%e, "Failed to save spawned session");
+        }
+    });
+
+    info!(child = %child_hash, "Spawned child agent");
+    ok_response(
+        request_id,
+        json!({"spawned": true, "child_session_key": child_hash}),
+    )
 }
 
 // ============================================================

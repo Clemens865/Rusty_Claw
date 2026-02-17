@@ -17,6 +17,7 @@ rusty-claw-plugins.workspace = true
 rusty-claw-web.workspace = true
 rusty-claw-browser.workspace = true
 rusty-claw-canvas.workspace = true
+rusty-claw-media.workspace = true
 
 tokio.workspace = true
 tokio-util.workspace = true
@@ -40,8 +41,17 @@ serde_yaml.workspace = true
 
 [features]
 tls = ["axum-server"]
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies.axum-server]
+workspace = true
+optional = true
+
+[dependencies.metrics]
+workspace = true
+optional = true
+
+[dependencies.metrics-exporter-prometheus]
 workspace = true
 optional = true
 
